@@ -49,6 +49,7 @@ class YOLOSegmentation:
         self.alpha = 0.5
 
         self.model: Any | None = None
+        self._loaded_weights: Path | None = None
         self.img_grey: npt.NDArray[np.uint8]
         self.img_rgb: npt.NDArray[np.uint8]
         self.labels_watershed: npt.NDArray[np.int32]
@@ -112,9 +113,14 @@ class YOLOSegmentation:
 
         if cnn_model is not None and hasattr(cnn_model, "predict"):
             self.model = cnn_model
+            self._loaded_weights = None
             return
 
         weights = Path(self.weights_path)
+        # Reuse the model already in memory (batch processing calls this once per image).
+        if self.model is not None and self._loaded_weights == weights:
+            return
+
         if not weights.is_file():
             raise FileNotFoundError(
                 f"YOLO weights file not found. Set 'weights_path' to a valid .pt segmentation model: {weights}"
@@ -129,6 +135,7 @@ class YOLOSegmentation:
             ) from error
 
         self.model = YOLO(str(weights))
+        self._loaded_weights = weights
 
     def _predict_masks(self) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
         """Run YOLO and return masks plus confidence scores."""

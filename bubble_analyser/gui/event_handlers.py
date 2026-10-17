@@ -1145,11 +1145,12 @@ class ImageProcessingTabHandler(QThread):
             elif name in default_params:
                 cleaned[name] = default_params[name]
 
-        cleaned["confidence_threshold"] = float(cleaned.get("confidence_threshold", 0.5))
+        # Fallbacks mirror the BubMaskWatershed defaults so the two never drift apart.
+        cleaned["confidence_threshold"] = float(cleaned.get("confidence_threshold", 0.9))
         cleaned["resample"] = float(cleaned.get("resample", 1.0))
         cleaned["image_min_dim"] = int(float(cleaned.get("image_min_dim", 512)))
         cleaned["image_max_dim"] = int(float(cleaned.get("image_max_dim", 1024)))
-        cleaned["max_bubbles"] = int(float(cleaned.get("max_bubbles", 1500)))
+        cleaned["max_bubbles"] = int(float(cleaned.get("max_bubbles", 500)))
         cleaned["nms_threshold"] = float(cleaned.get("nms_threshold", 0.3))
 
         self.model.all_methods_n_params[algorithm] = cleaned
@@ -1350,6 +1351,11 @@ class ImageProcessingTabHandler(QThread):
             value_item = table_widget.item(row, 1)
             if name_item and value_item:
                 params[name_item.text()] = self.convert_value(value_item.text())
+            elif name_item:
+                # Parameters edited through a dropdown (e.g. YOLO "device") live in a cell widget, not an item.
+                cell_widget = table_widget.cellWidget(row, 1)
+                if isinstance(cell_widget, QComboBox):
+                    params[name_item.text()] = self.convert_value(cell_widget.currentText())
         return params  # type: ignore
 
     def update_segment_parameters(self) -> bool:
@@ -1799,6 +1805,8 @@ class ImageProcessingTabHandler(QThread):
         logging.info("------------------------------Validating Filter Parameters------------------------------")
         self.store_filter_params()
         self.update_segment_parameters()
+        if not self.validate_selected_segmentation_method():
+            return
         self.pass_filter_params()
         self.show_progress_window(len(self.model.img_path_list))
 

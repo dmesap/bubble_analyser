@@ -175,6 +175,31 @@ def bubble_polygons(frame: FrameAnnotation, output_shape: tuple[int, int]) -> li
     return polygons
 
 
+def render_label_mask(frame: FrameAnnotation) -> npt.NDArray[np.int32]:
+    """Rebuild the integer label image of a frame from its ellipses and polygons.
+
+    Batch processing frees ``labelled_mask`` to save memory, so the ``masks_npy`` export draws it
+    again from the stored geometry, in the processed-image resolution and with the same convention
+    as the live pipeline: background is 1 and bubbles are numbered from 2.
+
+    Raises:
+        ValueError: If the frame has no ``annotation_shape`` to draw on.
+    """
+    if frame.annotation_shape is None:
+        raise ValueError(f"Cannot rebuild the mask of {frame.image_path.name}: unknown image shape.")
+    height, width = frame.annotation_shape
+    labelled = np.ones((height, width), dtype=np.int32)
+    label = 2
+    for index, ellipse in enumerate(frame.ellipses):
+        manual = frame.polygons[index] if index < len(frame.polygons) else None
+        points = np.asarray(manual, dtype=float) if manual else ellipse_to_polygon(ellipse)
+        if points.ndim != 2 or points.shape[0] < 3 or points.shape[1] != 2:
+            continue
+        cv2.fillPoly(labelled, [np.round(points).astype(np.int32)], label)  # type: ignore[call-overload]
+        label += 1
+    return labelled
+
+
 def _polygon_area(points: npt.NDArray[np.float64]) -> float:
     x, y = points[:, 0], points[:, 1]
     return float(abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))) / 2.0)
@@ -324,9 +349,10 @@ def _write_masks(root: Path, frames: Sequence[FrameAnnotation]) -> int:
     masks_dir.mkdir(parents=True, exist_ok=True)
     instances = 0
     for frame in frames:
-        assert frame.labelled_mask is not None
+        stored = frame.labelled_mask
+        mask = stored if stored is not None and stored.size > 0 else render_label_mask(frame)
         _copy_image(frame.image_path, images_dir)
-        np.save(masks_dir / f"{frame.image_path.stem}_mask.npy", frame.labelled_mask)
+        np.save(masks_dir / f"{frame.image_path.stem}_mask.npy", mask)
         instances += len(frame.ellipses)
     return instances
 
@@ -352,7 +378,12 @@ def export_dataset(
     total = len(frames)
 
     if format_key == "masks_npy":
-        usable = [f for f in frames if f.labelled_mask is not None and f.labelled_mask.size > 0]
+        usable = [
+            f
+            for f in frames
+            if (f.labelled_mask is not None and f.labelled_mask.size > 0)
+            or (len(f.ellipses) > 0 and f.annotation_shape is not None)
+        ]
         summary.frames_without_bubbles = total - len(usable)
         if not usable:
             raise ValueError("No processed frame has a mask to export.")

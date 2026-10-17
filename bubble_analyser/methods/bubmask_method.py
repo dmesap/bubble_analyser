@@ -152,6 +152,8 @@ class BubMaskWatershed:
             # Ensure the pre-initialized model's config matches the current parameters
             self.detector.update_config(
                 confidence_threshold=self.confidence_threshold,
+                image_min_dim=self.image_min_dim,
+                image_max_dim=self.image_max_dim,
                 max_bubbles=self.max_bubbles,
                 nms_threshold=self.nms_threshold,
             )
