@@ -987,6 +987,20 @@ class ImageProcessingTabHandler(QThread):
 
         # Retrieve descriptions dynamically from the algorithm instance
         instance = self.model.methods_handler.all_classes.get(self.current_algorithm)
+
+        if self.current_algorithm == "BubMask (Deep Learning)":
+            self._ensure_bubmask_params_only()
+        else:
+            # Fallback: imported projects often store no parameters for the
+            # non-BubMask methods (YOLO Segmentation, Iterative Watershed,
+            # Peak-Based, ...), which left their parameter table empty. Seed it
+            # from the method's own defaults so its attributes are always visible
+            # and editable.
+            stored = self.model.all_methods_n_params.get(self.current_algorithm)
+            if not stored and instance is not None and hasattr(instance, "get_needed_params"):
+                self.model.all_methods_n_params[self.current_algorithm] = dict(instance.get_needed_params())
+
+        # Retrieve descriptions dynamically from the algorithm instance
         algo_descriptions = {}
         if instance and hasattr(instance, "get_param_descriptions"):
             algo_descriptions = instance.get_param_descriptions()
@@ -1100,6 +1114,45 @@ class ImageProcessingTabHandler(QThread):
                         self.gui.param_sandbox1.setItem(row, 1, value_item)
 
                 break
+
+    def _ensure_bubmask_params_only(self) -> None:
+        """Keep only the parameters that BubMask actually uses.
+
+        Some imported projects can carry watershed parameters in the BubMask
+        parameter dictionary. Those extra values confuse the GUI and can be
+        saved back into the project. This guard makes the BubMask table explicit
+        and stable.
+        """
+        algorithm = "BubMask (Deep Learning)"
+        current = self.model.all_methods_n_params.get(algorithm, {})
+        instance = self.model.methods_handler.all_classes.get(algorithm)
+        default_params = instance.get_needed_params() if instance and hasattr(instance, "get_needed_params") else {}
+
+        wanted_order = [
+            "weights_path",
+            "confidence_threshold",
+            "resample",
+            "image_min_dim",
+            "image_max_dim",
+            "max_bubbles",
+            "nms_threshold",
+        ]
+        cleaned = {}
+        for name in wanted_order:
+            if name in current:
+                cleaned[name] = current[name]
+            elif name in default_params:
+                cleaned[name] = default_params[name]
+
+        cleaned["confidence_threshold"] = float(cleaned.get("confidence_threshold", 0.5))
+        cleaned["resample"] = float(cleaned.get("resample", 1.0))
+        cleaned["image_min_dim"] = int(float(cleaned.get("image_min_dim", 512)))
+        cleaned["image_max_dim"] = int(float(cleaned.get("image_max_dim", 1024)))
+        cleaned["max_bubbles"] = int(float(cleaned.get("max_bubbles", 1500)))
+        cleaned["nms_threshold"] = float(cleaned.get("nms_threshold", 0.3))
+
+        self.model.all_methods_n_params[algorithm] = cleaned
+        self.model.methods_handler.full_dict[algorithm] = cleaned
 
     def handle_algorithm_change(self, new_algorithm: str) -> None:
         """Handle a change in the selected algorithm.
@@ -1314,9 +1367,24 @@ class ImageProcessingTabHandler(QThread):
         # Update the model's dictionary for the selected algorithm
         for algorithm_name, params_in_dict in self.model.all_methods_n_params.items():
             if algorithm_name == self.model.algorithm:
+                if algorithm_name == "BubMask (Deep Learning)":
+                    allowed = {
+                        "weights_path",
+                        "confidence_threshold",
+                        "resample",
+                        "image_min_dim",
+                        "image_max_dim",
+                        "max_bubbles",
+                        "nms_threshold",
+                    }
+                    params = {name: value for name, value in params.items() if name in allowed}
+                    params_in_dict.clear()
                 for name, value in params.items():
                     logging.debug(f"Updating {name} to {value}")
                     params_in_dict[name] = value
+
+        if self.model.algorithm == "BubMask (Deep Learning)":
+            self._ensure_bubmask_params_only()
 
         return True
 

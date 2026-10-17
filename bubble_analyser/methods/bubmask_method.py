@@ -42,12 +42,12 @@ class BubMaskWatershed:
         base_dir = str(Path(__file__).resolve().parents[2])
         self.weights_path: str = os.path.join(base_dir, "bubble_analyser/weights/mask_rcnn_bubble.h5")
         self.confidence_threshold: float = 0.9
-        self.resample: float = 0.5
+        self.resample: float = 1.0
         self.target_width: int = 1000
-        self.image_min_dim: int = 192
-        self.image_max_dim: int = 384
+        self.image_min_dim: int = 512
+        self.image_max_dim: int = 1024
         self.alpha: float = 0.5
-        self.max_bubbles: int = 300
+        self.max_bubbles: int = 500
         self.nms_threshold: float = 0.3
 
         self.detector: BubMaskDetector | None = None
@@ -71,6 +71,8 @@ class BubMaskWatershed:
             "weights_path": self.weights_path,
             "confidence_threshold": self.confidence_threshold,
             "resample": self.resample,
+            "image_min_dim": self.image_min_dim,
+            "image_max_dim": self.image_max_dim,
             "max_bubbles": self.max_bubbles,
             "nms_threshold": self.nms_threshold,
         }
@@ -85,6 +87,8 @@ class BubMaskWatershed:
             "weights_path": "Absolute path to the trained Mask R-CNN model weights (.h5 file).",
             "confidence_threshold": "Minimum probability (0.0 to 1.0) required for a detection to be accepted as a bubble.",  # noqa: E501
             "resample": "Resampling factor to scale the image before processing. Lower values increase speed but reduce detail.",  # noqa: E501
+            "image_min_dim": "Minimum internal image dimension used by Mask R-CNN. Higher values improve small-bubble detection but increase runtime and memory use.",  # noqa: E501
+            "image_max_dim": "Maximum internal image dimension used by Mask R-CNN. Higher values improve small-bubble detection but increase runtime and memory use.",  # noqa: E501
             "max_bubbles": "Maximum number of bubbles the model is allowed to detect in a single image.",
             "nms_threshold": "Non-Maximum Suppression threshold. Lower values allow less overlap between detected bubbles.",  # noqa: E501
         }
@@ -102,6 +106,10 @@ class BubMaskWatershed:
             self.confidence_threshold = float(cast(float, params["confidence_threshold"]))
         if "resample" in params:
             self.resample = float(cast(float, params["resample"]))
+        if "image_min_dim" in params:
+            self.image_min_dim = int(cast(float, params["image_min_dim"]))
+        if "image_max_dim" in params:
+            self.image_max_dim = int(cast(float, params["image_max_dim"]))
         if "max_bubbles" in params:
             self.max_bubbles = int(cast(float, params["max_bubbles"]))
         if "nms_threshold" in params:
