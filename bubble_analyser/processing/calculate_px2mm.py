@@ -13,13 +13,14 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 from cv2.typing import MatLike
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QImage, QMouseEvent, QPixmap
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QImage, QMouseEvent, QPixmap, QWheelEvent
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QLabel,
     QMainWindow,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -55,6 +56,17 @@ class ImageLabel(QLabel):
         self.img: npt.NDArray[np.int_]
         self.img_copy: npt.NDArray[np.int_]
         self.img_final: MatLike
+        self.display_scale = 1.0
+        self.min_display_scale = 0.25
+        self.max_display_scale = 8.0
+        self.scroll_area: QScrollArea | None = None
+        self.panning = False
+        self.last_pan_global_position: QPoint | None = None
+        self.setMouseTracking(True)
+
+    def attach_scroll_area(self, scroll_area: QScrollArea) -> None:
+        """Connect the label to its scroll area for middle-button panning."""
+        self.scroll_area = scroll_area
 
     def set_image(self, img: npt.NDArray[np.int_]) -> None:
         """Set the image to be displayed in the label.
@@ -64,10 +76,14 @@ class ImageLabel(QLabel):
         """
         self.img = img
         self.img_copy = img.copy()
-        height, width, _channel = img.shape
-        bytes_per_line = 3 * width
-        q_img = QImage(memoryview(img), width, height, bytes_per_line, QImage.Format.Format_RGB888)  # type: ignore
-        self.setPixmap(QPixmap.fromImage(q_img))
+        self.update_image()
+
+    def event_to_image_position(self, ev: QMouseEvent) -> tuple[int, int]:
+        """Map a mouse event from display coordinates into calibration-image pixels."""
+        x = round(ev.position().x() / max(self.display_scale, 1e-6))
+        y = round(ev.position().y() / max(self.display_scale, 1e-6))
+        height, width = self.img.shape[:2]
+        return min(max(x, 0), width - 1), min(max(y, 0), height - 1)
 
     def mousePressEvent(self, ev: QMouseEvent) -> None:
         """Handle mouse press events for starting line drawing.
@@ -75,8 +91,13 @@ class ImageLabel(QLabel):
         Args:
             ev (QMouseEvent): The mouse event containing click coordinates.
         """
+        if ev.button() == Qt.MouseButton.MiddleButton:
+            self.panning = True
+            self.last_pan_global_position = ev.globalPosition().toPoint()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
         if ev.button() == Qt.MouseButton.LeftButton:
-            self.refPt.append((ev.x(), ev.y()))
+            self.refPt.append(self.event_to_image_position(ev))
             self.drawing = True
 
     def mouseMoveEvent(self, ev: QMouseEvent) -> None:
@@ -85,9 +106,16 @@ class ImageLabel(QLabel):
         Args:
             ev (QMouseEvent): The mouse event containing current coordinates.
         """
+        if self.panning and self.scroll_area is not None and self.last_pan_global_position is not None:
+            current_global = ev.globalPosition().toPoint()
+            delta = current_global - self.last_pan_global_position
+            self.scroll_area.horizontalScrollBar().setValue(self.scroll_area.horizontalScrollBar().value() - delta.x())
+            self.scroll_area.verticalScrollBar().setValue(self.scroll_area.verticalScrollBar().value() - delta.y())
+            self.last_pan_global_position = current_global
+            return
         if self.drawing:
             self.img_copy[:] = self.img[:]
-            cv2.line(self.img_copy, self.refPt[0], (ev.x(), ev.y()), (0, 255, 0), 2)
+            cv2.line(self.img_copy, self.refPt[0], self.event_to_image_position(ev), (0, 255, 0), 2)
             self.update_image()
 
     def mouseReleaseEvent(self, ev: QMouseEvent) -> None:
@@ -96,11 +124,39 @@ class ImageLabel(QLabel):
         Args:
             ev (QMouseEvent): The mouse event containing final coordinates.
         """
+        if ev.button() == Qt.MouseButton.MiddleButton:
+            self.panning = False
+            self.last_pan_global_position = None
+            self.unsetCursor()
+            return
         if ev.button() == Qt.MouseButton.LeftButton:
-            self.refPt.append((ev.x(), ev.y()))
+            self.refPt.append(self.event_to_image_position(ev))
             self.drawing = False
             self.img_final = cv2.line(self.img, self.refPt[0], self.refPt[1], (0, 255, 0), 2)
             self.update_image()
+
+    def wheelEvent(self, ev: QWheelEvent) -> None:
+        """Zoom in/out around the cursor with the mouse wheel."""
+        old_scale = self.display_scale
+        multiplier = 1.25 if ev.angleDelta().y() > 0 else 0.8
+        self.display_scale = min(
+            self.max_display_scale,
+            max(self.min_display_scale, self.display_scale * multiplier),
+        )
+        if abs(self.display_scale - old_scale) < 1e-6:
+            return
+
+        image_x = ev.position().x() / max(old_scale, 1e-6)
+        image_y = ev.position().y() / max(old_scale, 1e-6)
+        viewport_pos = (
+            self.scroll_area.viewport().mapFromGlobal(ev.globalPosition().toPoint())
+            if self.scroll_area is not None
+            else QPoint(0, 0)
+        )
+        self.update_image()
+        if self.scroll_area is not None:
+            self.scroll_area.horizontalScrollBar().setValue(round(image_x * self.display_scale - viewport_pos.x()))
+            self.scroll_area.verticalScrollBar().setValue(round(image_y * self.display_scale - viewport_pos.y()))
 
     def update_image(self) -> None:
         """Update the displayed image with the current drawing state.
@@ -116,7 +172,16 @@ class ImageLabel(QLabel):
             bytes_per_line,
             QImage.Format.Format_RGB888,
         )  # type: ignore
-        self.setPixmap(QPixmap.fromImage(q_img))
+        pixmap = QPixmap.fromImage(q_img)
+        if abs(self.display_scale - 1.0) > 1e-6:
+            pixmap = pixmap.scaled(
+                round(width * self.display_scale),
+                round(height * self.display_scale),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        self.setPixmap(pixmap)
+        self.resize(pixmap.size())
 
 
 def resize_to_target_width(image: npt.NDArray[np.int_], target_width: int = 1000) -> tuple[npt.NDArray[np.int_], float]:
@@ -154,12 +219,21 @@ def get_pixel_distance(img: npt.NDArray[np.int_], main_window: QMainWindow) -> t
     dialog = QDialog(main_window)
     dialog.setWindowTitle("Draw Line for Measurement")
     dialog.setModal(True)
-    dialog.setGeometry(100, 100, img.shape[1], img.shape[0])
+    dialog.setMinimumSize(700, 500)
+    dialog.resize(min(img.shape[1] + 40, 1400), min(img.shape[0] + 80, 900))
 
     label = ImageLabel(dialog)
     label.set_image(img)  # type: ignore
+    label.resize(img.shape[1], img.shape[0])
+
+    scroll_area = QScrollArea(dialog)
+    scroll_area.setWidget(label)
+    scroll_area.setWidgetResizable(False)
+    scroll_area.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+    label.attach_scroll_area(scroll_area)
+
     layout = QVBoxLayout(dialog)
-    layout.addWidget(label)
+    layout.addWidget(scroll_area)
     dialog.setLayout(layout)
     dialog.show()
 
