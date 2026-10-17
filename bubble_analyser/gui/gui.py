@@ -647,8 +647,8 @@ class MainWindow(QMainWindow):
         # Export annotated images button
         self.export_images_button = QPushButton("Export Annotated Images")
 
-        # Export ML training data button
-        self.export_ml_button = QPushButton("Export ML Training Data")
+        # Export the corrected segmentations as a dataset (format chosen in a dialog)
+        self.export_ml_button = QPushButton("Export Dataset (choose format)")
 
         # Restart button (new addition)
         self.restart_button = QPushButton("Restart New Mission")

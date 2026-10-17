@@ -77,7 +77,17 @@ Once your batch analysis is finalised, navigate to the **Results** tab to extrac
 
 1. **Save Results (Excel + Graph)**: Creates an Excel file containing all bubble metrics (major/minor axis, equivalent diameter, area, eccentricity) and a `.png` of the generated histogram.
 2. **Export Annotated Images**: Select a folder to dump all the visual previews (images overlaid with the detected ellipses) for inclusion in reports.
-3. **Export ML Training Data**: Select a root folder. The app will generate an `images/` directory containing exact copies of your raw images, and a `masks/` directory containing high-fidelity `.npy` numpy arrays representing the exact integer matrix of the instance segmentation masks. This format preserves manual edits perfectly for retraining segmentation models.
+3. **Export Dataset (choose format)**: Pick a format, then a root folder. Every format uses your manual edits, writes bubbles at the original image resolution (manual polygon when there is one, fitted ellipse otherwise), and copies the images next to the annotations. Images with no bubbles are skipped.
+
+   | Format | Output | Typical use |
+   | --- | --- | --- |
+   | YOLO segmentation | `images/`, `labels/*.txt` (`class x1 y1 x2 y2 ...`, normalised), `data.yaml` | Training Ultralytics `-seg` models |
+   | YOLO detection | `images/`, `labels/*.txt` (`class x_center y_center width height`, normalised), `data.yaml` | Training box detectors |
+   | COCO instance segmentation | `images/`, `annotations.json` (pixel polygons, boxes, areas) | Detectron2, MMDetection, pycocotools |
+   | Pascal VOC | `JPEGImages/`, `Annotations/*.xml`, `ImageSets/Main/trainval.txt` (boxes only) | Box-based VOC tooling |
+   | Masks (`.npy`) | `images/`, `masks/*_mask.npy` (integer label image at the processed resolution) | The export of earlier versions |
+
+   The YOLO `data.yaml` points `train` and `val` at the same folder: no train/validation split is made, so split the images before training.
 
 ## Dependencies
 

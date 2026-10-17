@@ -21,7 +21,6 @@ from __future__ import annotations
 import importlib.util
 import logging
 import os
-import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -62,8 +61,10 @@ from bubble_analyser.gui import (
     Step2Worker,
     WorkerThread,
 )
+from bubble_analyser.gui.export_dialog import ExportFormatDialog
 from bubble_analyser.gui.gui import MainWindow, ProcessingDialog
 from bubble_analyser.processing import Config, cv2_to_qpixmap
+from bubble_analyser.processing.dataset_export import FrameAnnotation, export_dataset
 
 
 class WeightsDownloadThread(QThread):
@@ -2309,45 +2310,59 @@ class ResultsTabHandler(QThread):
         )
 
     def export_ml_data(self) -> None:
-        """Export ML training data (raw images + numpy masks) in an organized structure."""
-        root_path = QFileDialog.getExistingDirectory(self.gui, "Select Folder to Export ML Training Data")
+        """Export the corrected segmentations as a dataset, in the format the user picks."""
+        dialog = ExportFormatDialog(self.gui)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        dataset_format = dialog.selected_format()
+
+        root_path = QFileDialog.getExistingDirectory(self.gui, f"Select Folder for the {dataset_format.label} Export")
         if not root_path:
             return
 
-        # Create subdirectories
-        images_dir = Path(root_path) / "images"
-        masks_dir = Path(root_path) / "masks"
-        images_dir.mkdir(exist_ok=True)
-        masks_dir.mkdir(exist_ok=True)
-
-        success_count = 0
-        error_count = 0
-
-        for name in self.model.img_path_list:
+        processed_paths = [
+            name
+            for name in self.model.img_path_list
+            if (state := self.model.img_dict.get(name)) is not None
+            and (len(state.ellipses) > 0 or state.labelled_ellipses_mask.size > 0)
+        ]
+        frames: list[FrameAnnotation] = []
+        for name in processed_paths:
             state = self.model.img_dict.get(name)
-            if state and state.labelled_ellipses_mask is not None:
-                base_name = os.path.splitext(os.path.basename(name))[0]
-                img_ext = os.path.splitext(name)[1]
+            if state is None:
+                continue
+            height, width = state.img_rgb.shape[:2]
+            frames.append(
+                FrameAnnotation(
+                    image_path=Path(name),
+                    ellipses=state.ellipses,
+                    polygons=getattr(state, "ellipse_polygons", ()),
+                    annotation_shape=(height, width),
+                    labelled_mask=state.labelled_ellipses_mask,
+                )
+            )
 
-                img_dest = images_dir / f"{base_name}{img_ext}"
-                mask_dest = masks_dir / f"{base_name}_mask.npy"
+        try:
+            summary = export_dataset(Path(root_path), frames, dataset_format.key)
+        except ValueError as error:
+            QMessageBox.warning(self.gui, "Nothing to Export", str(error))
+            return
+        except Exception as error:
+            logging.exception("Dataset export failed")
+            QMessageBox.critical(self.gui, "Export Failed", str(error))
+            return
 
-                try:
-                    # Copy original image
-                    shutil.copy2(name, img_dest)
-                    # Save mask as numpy array
-                    np.save(mask_dest, state.labelled_ellipses_mask)
-                    success_count += 1
-                except Exception as e:
-                    logging.error(f"Failed to export ML data for {name}: {e}")
-                    error_count += 1
-
-        QMessageBox.information(
-            self.gui,
-            "ML Export Complete",
-            f"Successfully exported {success_count} data pairs to {root_path}."
-            + (f"\nFailed: {error_count}" if error_count > 0 else ""),
-        )
+        unprocessed = len(self.model.img_path_list) - len(processed_paths)
+        lines = [
+            f"Exported {summary.frames_exported} images and {summary.instances_exported} bubbles "
+            f"as {dataset_format.label} to {root_path}.",
+            f"Skipped {unprocessed} unprocessed images.",
+        ]
+        if summary.frames_without_bubbles:
+            lines.append(f"Skipped {summary.frames_without_bubbles} processed images without bubbles.")
+        if summary.failed:
+            lines.append(f"Failed: {len(summary.failed)} ({summary.failed[0][0]}: {summary.failed[0][1]})")
+        QMessageBox.information(self.gui, "Export Complete", "\n".join(lines))
 
     def save_graph(self, export_path: str) -> None:
         """Saves the current histogram to the selected folder."""
