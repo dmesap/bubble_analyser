@@ -28,6 +28,57 @@ def normalize_yolo_device(device: object) -> str:
     return device_text
 
 
+def describe_cuda_problem() -> str | None:
+    """Explain why PyTorch cannot use the GPU, or return ``None`` when CUDA is usable.
+
+    Distinguishes the four situations that all look like "no GPU" to ``torch.cuda.is_available()``
+    so the user is told what to fix: PyTorch missing, a CPU-only PyTorch build (the default pip
+    wheel on Windows), no GPU/driver visible to PyTorch, or a GPU whose architecture the installed
+    PyTorch build was not compiled for (recent builds dropped older GPUs such as Pascal).
+    """
+    try:
+        import torch
+    except ImportError:
+        return (
+            "PyTorch ('torch') is not installed. Install PyTorch with CUDA support from "
+            "https://pytorch.org/get-started/locally/ (installing 'ultralytics' alone may give a CPU-only build)."
+        )
+    except Exception as error:  # a broken install can fail with OSError (e.g. missing DLLs)
+        return f"PyTorch is installed but could not be loaded: {error}"
+
+    if torch.version.cuda is None:
+        return (
+            f"The installed PyTorch ({torch.__version__}) is a CPU-only build. "
+            "Reinstall PyTorch with CUDA support from https://pytorch.org/get-started/locally/."
+        )
+
+    if not torch.cuda.is_available():
+        return (
+            f"PyTorch {torch.__version__} (built for CUDA {torch.version.cuda}) cannot see an NVIDIA GPU. "
+            "Check that an NVIDIA GPU is present and that its driver is installed and up to date."
+        )
+
+    try:
+        major, minor = torch.cuda.get_device_capability(0)
+        gpu_name = torch.cuda.get_device_name(0)
+        arch_list = torch.cuda.get_arch_list()
+    except Exception as error:
+        return f"PyTorch could not query the GPU: {error}"
+
+    device_cc = major * 10 + minor
+    supported = f"sm_{device_cc}" in arch_list or any(
+        entry.startswith("compute_") and entry.removeprefix("compute_").isdigit() and int(entry[8:]) <= device_cc
+        for entry in arch_list
+    )
+    if not supported:
+        return (
+            f"The GPU '{gpu_name}' (compute capability {major}.{minor}) is not supported by this PyTorch build "
+            f"(compiled for: {', '.join(arch_list)}). Install a PyTorch build made with an older CUDA toolkit "
+            "(for example the CUDA 12.6 wheels) that still includes this GPU architecture."
+        )
+    return None
+
+
 class YOLOSegmentation:
     """Segment bubbles with an Ultralytics YOLO segmentation model."""
 

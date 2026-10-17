@@ -1420,16 +1420,21 @@ class ImageProcessingTabHandler(QThread):
                 "The Python package 'ultralytics' is not installed in the Bubble Analyzer environment."
             )
 
-        if selected_device in ["gpu", "cuda", "0"] and not self.is_torch_cuda_available():
-            params["device"] = "CPU"  # type: ignore[assignment]  # YOLO params also hold strings
-            self.set_yolo_device_combo_text("CPU")
-            QMessageBox.warning(
-                self.gui,
-                "GPU Not Available",
-                "GPU was selected, but PyTorch does not detect an available NVIDIA CUDA device.\n\n"
-                "Bubble Analyzer will continue with CPU for this run.\n\n"
-                "CPU is slower, but it is the safest compatible option.",
-            )
+        if selected_device in ["gpu", "cuda", "0"]:
+            from bubble_analyser.methods.yolo_method import describe_cuda_problem
+
+            cuda_problem = describe_cuda_problem()
+            if cuda_problem is not None:
+                params["device"] = "CPU"  # type: ignore[assignment]  # YOLO params also hold strings
+                self.set_yolo_device_combo_text("CPU")
+                logging.warning(f"GPU unavailable for YOLO: {cuda_problem}")
+                QMessageBox.warning(
+                    self.gui,
+                    "GPU Not Available",
+                    f"GPU was selected, but it cannot be used:\n\n{cuda_problem}\n\n"
+                    "Bubble Analyzer will continue with CPU for this run.\n\n"
+                    "CPU is slower, but it is the safest compatible option.",
+                )
 
         if not missing_items:
             return True
@@ -1442,17 +1447,6 @@ class ImageProcessingTabHandler(QThread):
             + "\n\nUse BubMask for now, or install Ultralytics and set weights_path to your trained YOLO .pt model.",
         )
         return False
-
-    def is_torch_cuda_available(self) -> bool:
-        """Return True when PyTorch can use an NVIDIA CUDA GPU."""
-        try:
-            import torch
-        except Exception:
-            return False
-        try:
-            return bool(torch.cuda.is_available())
-        except Exception:
-            return False
 
     def set_yolo_device_combo_text(self, text: str) -> None:
         """Update the YOLO device combo box in the parameter table, when visible."""
