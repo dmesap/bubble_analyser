@@ -18,6 +18,7 @@ This project is significantly improved based on the first version of [Bubble Ana
   - **Iterative Watershed**: Advanced algorithm that iteratively applies thresholds to detect objects at different intensity levels.
   - **Peak-Based Watershed**: Feature-based segmentation using local maxima.
   - **BubMask (Deep Learning)**: Integrated Mask R-CNN model based on [BubMask (Kim & Park, 2021)](https://github.com/ywflow/BubMask) for superior accuracy in complex lighting or overlapping conditions.
+  - **YOLO Segmentation (optional)**: Any [Ultralytics](https://github.com/ultralytics/ultralytics) YOLO segmentation model (`.pt`). It needs `pip install ultralytics` (AGPL-3.0) and a weights file set in `weights_path`; the device can be CPU or GPU (CUDA).
 - **Interactive Ellipse Adjuster**: Manual adjustment interface for pixel-perfect refinement of detected bubbles.
 - **Measurement & Calibration**: Calculate sizes, shape distributions, and convert pixel measurements to real-world units (mm) using reference images.
 - **Streamlined Workflow**: Linear processing workflow (Batch -> Finalise -> Export) with no mid-process interruptions.

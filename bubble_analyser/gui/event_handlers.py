@@ -18,6 +18,7 @@ the GUI and the underlying processing logic.
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
 import shutil
@@ -1075,6 +1076,22 @@ class ImageProcessingTabHandler(QThread):
                         # Set the combo box as the cell widget
                         self.gui.param_sandbox1.setCellWidget(row, 1, combo_box)
 
+                    elif name == "device" and self.current_algorithm == "YOLO Segmentation":
+                        combo_box = QComboBox()
+                        combo_box.addItems(["CPU", "GPU"])
+                        combo_box.setToolTip(
+                            "CPU: runs on the processor and is always compatible.\n"
+                            "GPU: uses NVIDIA CUDA through PyTorch when available."
+                        )
+
+                        current_value = str(value).strip().lower()
+                        if current_value in ["gpu", "cuda", "0"]:
+                            combo_box.setCurrentText("GPU")
+                        else:
+                            combo_box.setCurrentText("CPU")
+
+                        self.gui.param_sandbox1.setCellWidget(row, 1, combo_box)
+
                     else:
                         # Regular text item for other parameters
                         value_item = QTableWidgetItem(str(value))
@@ -1219,6 +1236,8 @@ class ImageProcessingTabHandler(QThread):
         logging.info("-------------------------------Running Step 1: Segmentation------------------------------")
         logging.info("-----------------------------------------------------------------------------------------")
         self.update_segment_parameters()
+        if not self.validate_selected_segmentation_method():
+            return
 
         # Validate the parameters
         logging.info("------------------------------Validating Segment Parameters------------------------------")
@@ -1300,6 +1319,77 @@ class ImageProcessingTabHandler(QThread):
                     params_in_dict[name] = value
 
         return True
+
+    def validate_selected_segmentation_method(self) -> bool:
+        """Validate requirements that are specific to the selected segmentation method."""
+        if self.model.algorithm != "YOLO Segmentation":
+            return True
+
+        params = self.model.all_methods_n_params.get(self.model.algorithm, {})
+        weights_path = Path(str(params.get("weights_path", ""))).expanduser()
+        selected_device = str(params.get("device", "CPU")).strip().lower()
+        missing_items: list[str] = []
+
+        if not weights_path.is_file():
+            missing_items.append(
+                "YOLO weights were not found. Set 'weights_path' to a valid YOLO segmentation .pt file.\n"
+                f"Current path:\n{weights_path}"
+            )
+        elif weights_path.suffix.lower() != ".pt":
+            missing_items.append(
+                f"The selected YOLO weights file should be a .pt segmentation model.\nCurrent file:\n{weights_path}"
+            )
+
+        if importlib.util.find_spec("ultralytics") is None:
+            missing_items.append(
+                "The Python package 'ultralytics' is not installed in the Bubble Analyzer environment."
+            )
+
+        if selected_device in ["gpu", "cuda", "0"] and not self.is_torch_cuda_available():
+            params["device"] = "CPU"  # type: ignore[assignment]  # YOLO params also hold strings
+            self.set_yolo_device_combo_text("CPU")
+            QMessageBox.warning(
+                self.gui,
+                "GPU Not Available",
+                "GPU was selected, but PyTorch does not detect an available NVIDIA CUDA device.\n\n"
+                "Bubble Analyzer will continue with CPU for this run.\n\n"
+                "CPU is slower, but it is the safest compatible option.",
+            )
+
+        if not missing_items:
+            return True
+
+        QMessageBox.warning(
+            self.gui,
+            "YOLO Segmentation Not Ready",
+            "YOLO Segmentation needs a trained YOLO segmentation model before it can run.\n\n"
+            + "\n\n".join(missing_items)
+            + "\n\nUse BubMask for now, or install Ultralytics and set weights_path to your trained YOLO .pt model.",
+        )
+        return False
+
+    def is_torch_cuda_available(self) -> bool:
+        """Return True when PyTorch can use an NVIDIA CUDA GPU."""
+        try:
+            import torch
+        except Exception:
+            return False
+        try:
+            return bool(torch.cuda.is_available())
+        except Exception:
+            return False
+
+    def set_yolo_device_combo_text(self, text: str) -> None:
+        """Update the YOLO device combo box in the parameter table, when visible."""
+        row_count = self.gui.param_sandbox1.rowCount()
+        for row in range(row_count):
+            name_item = self.gui.param_sandbox1.item(row, 0)
+            if name_item is None or name_item.text() != "device":
+                continue
+            cell_widget = self.gui.param_sandbox1.cellWidget(row, 1)
+            if isinstance(cell_widget, QComboBox):
+                cell_widget.setCurrentText(text)
+            return
 
     def _process_step_1(self) -> None:
         """Execute the first step of image processing.
