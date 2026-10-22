@@ -412,12 +412,7 @@ class FolderTabHandler:
         image_path = folder_path + "/" + selected_image
         pixmap = QPixmap(image_path)
 
-        self.gui.image_preview.setPixmap(
-            pixmap.scaled(
-                self.gui.image_preview.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-            )
-        )
+        self.gui.image_preview.set_preview_pixmap(pixmap)
 
     def _show_warning(self, title: str, message: str) -> None:
         """Display a warning message box to the user.
@@ -502,12 +497,7 @@ class CalibrationTabHandler:
         if image_path:
             self.gui.pixel_img_name.setText(image_path)
             pixmap = QPixmap(image_path)
-            self.gui.pixel_img_preview.setPixmap(
-                pixmap.scaled(
-                    self.gui.pixel_img_preview.size(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                )
-            )
+            self.gui.pixel_img_preview.set_preview_pixmap(pixmap)
             return True
         else:
             logging.info("User cancelled ruler image selection")
@@ -527,17 +517,16 @@ class CalibrationTabHandler:
         if os.path.exists(img_path):
             px2mm, img_drawed_line = self.calibration_model.get_px2mm_ratio(pixel_img_path=img_path, gui=self.gui)
 
+            if px2mm <= 0:
+                self.gui.statusBar().showMessage("Calibration cancelled: no line was drawn.", 5000)
+                return
+
             px2mm_display = px2mm
 
             self.gui.manual_px_mm_input.setText(f"{px2mm_display:.3f}")
 
             pixmap = cv2_to_qpixmap(img_drawed_line)
-            self.gui.pixel_img_preview.setPixmap(
-                pixmap.scaled(
-                    self.gui.pixel_img_preview.size(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                )
-            )
+            self.gui.pixel_img_preview.set_preview_pixmap(pixmap)
             logging.info(f"Pixel to millimeter ratio detected as: {px2mm:.3f}")
         else:
             self.gui.statusBar().showMessage("Image file does not exist or not selected.", 5000)
@@ -568,12 +557,7 @@ class CalibrationTabHandler:
             self.calibration_model.bknd_img_path = Path(image_path)
             self.gui.bg_corr_image_name.setText(image_path)
             pixmap = QPixmap(image_path)
-            self.gui.bg_corr_image_preview.setPixmap(
-                pixmap.scaled(
-                    self.gui.bg_corr_image_preview.size(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                )
-            )
+            self.gui.bg_corr_image_preview.set_preview_pixmap(pixmap)
             self.calibration_model.if_bknd = True
             logging.info(f"Background image path set as: {image_path}")
         else:
@@ -619,12 +603,7 @@ class CalibrationTabHandler:
         image_path = folder_path + "/" + selected_image
         pixmap = QPixmap(image_path)
 
-        self.gui.sample_image_preview.setPixmap(
-            pixmap.scaled(
-                self.gui.sample_image_preview.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-            )
-        )
+        self.gui.sample_image_preview.set_preview_pixmap(pixmap)
 
         # Update the image info display for the initial image
         if hasattr(self.gui, "sample_image_info_label"):
@@ -715,12 +694,7 @@ class ImageProcessingTabHandler(QThread):
         image_path = folder_path + "/" + selected_image
         pixmap = QPixmap(image_path)
 
-        self.gui.sample_image_preview.setPixmap(
-            pixmap.scaled(
-                self.gui.sample_image_preview.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-            )
-        )
+        self.gui.sample_image_preview.set_preview_pixmap(pixmap)
 
         # Update the filename and index display
         self.update_image_info_display()

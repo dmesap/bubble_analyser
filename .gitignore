@@ -34,6 +34,9 @@ share/python-wheels/
 *.egg
 MANIFEST
 bubble_analyser/weights/*.h5
+bubble_analyser/weights/*.pt
+*.pt
+weights/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

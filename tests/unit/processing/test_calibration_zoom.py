@@ -24,6 +24,9 @@ class _Wheel(_Mouse):
     def globalPosition(self) -> QPointF:
         return QPointF(10, 10)
 
+    def accept(self) -> None:
+        pass
+
 
 def _label(width: int = 200, height: int = 100) -> ImageLabel:
     QApplication.instance() or QApplication([])
