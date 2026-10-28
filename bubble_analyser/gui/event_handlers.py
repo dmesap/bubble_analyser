@@ -1700,17 +1700,73 @@ class ImageProcessingTabHandler(QThread):
             "The analysis will be finalised. \n "
             "Make sure you are satisfied with the segmentation of all images. Confirm to finalise.",
         )
+        self.create_save_images_checkbox(confirm_dialog)
 
         response = confirm_dialog.exec()
 
         if response == QMessageBox.StandardButton.Ok:
             self.model.if_finalise_analysis = True
+            self.model.refresh_ellipses_properties()
+
+            if self.if_save_processed_images:
+                save_dir = None
+                if hasattr(self, "export_handler") and self.export_handler and self.export_handler.if_save_path:
+                    save_dir = str(self.export_handler.save_path)
+                if not save_dir or not os.path.exists(save_dir):
+                    save_dir = QFileDialog.getExistingDirectory(
+                        self.gui, "Select Folder to Save Annotated Images"
+                    )
+                if save_dir:
+                    self.save_annotated_images_to_directory(save_dir)
+
             # Transition directly to results
             self.gui.tabs.setCurrentIndex(self.gui.tabs.indexOf(self.gui.results_tab))
             self.batch_processing_done.emit()  # Trigger histogram generation
             logging.info("Analysis finalised. Switched to results tab.")
         else:
             logging.info("Analysis finalisation canceled.")
+
+    def save_annotated_images_to_directory(self, folder_path: str) -> tuple[int, int]:
+        """Save annotated images with ellipses overlaid to the specified directory.
+
+        Args:
+            folder_path: Directory path where images should be saved.
+
+        Returns:
+            tuple[int, int]: (success_count, error_count)
+        """
+        success_count = 0
+        error_count = 0
+        Path(folder_path).mkdir(parents=True, exist_ok=True)
+
+        for name in self.model.img_path_list:
+            annotated_img = self.model.get_or_render_annotated_image(name)
+            if annotated_img is not None and annotated_img.size > 0:
+                base_name = os.path.splitext(os.path.basename(name))[0]
+                export_path = os.path.join(folder_path, f"{base_name}_annotated.png")
+                try:
+                    img_uint8 = np.asarray(annotated_img, dtype=np.uint8)
+                    if img_uint8.ndim == 3 and img_uint8.shape[2] == 3:
+                        bgr = cv2.cvtColor(img_uint8, cv2.COLOR_RGB2BGR)
+                    else:
+                        bgr = img_uint8
+                    success, enc = cv2.imencode(".png", bgr)
+                    if success:
+                        enc.tofile(export_path)
+                        success_count += 1
+                    else:
+                        if cv2.imwrite(export_path, bgr):
+                            success_count += 1
+                        else:
+                            error_count += 1
+                except Exception as e:
+                    logging.error(f"Failed to save annotated image {name}: {e}")
+                    error_count += 1
+            else:
+                error_count += 1
+
+        logging.info(f"Saved {success_count} annotated images to {folder_path} (Errors: {error_count})")
+        return success_count, error_count
 
     def create_confirm_dialog(self, title: str, text: str) -> QMessageBox:
         """Create a confirmation dialog for batch processing.
@@ -1733,7 +1789,8 @@ class ImageProcessingTabHandler(QThread):
         Returns:
             QCheckBox: The configured checkbox widget.
         """
-        save_images_checkbox = QCheckBox("Save processed images")
+        save_images_checkbox = QCheckBox("Save processed images with ellipses")
+        save_images_checkbox.setChecked(self.if_save_processed_images)
         save_images_checkbox.stateChanged.connect(
             lambda: self.update_if_save_processed_images(save_images_checkbox.isChecked())
         )
@@ -2208,6 +2265,9 @@ class ResultsTabHandler(QThread):
         Returns:
             npt.NDArray[np.float64]: Array of equivalent diameters from all processed images.
         """
+        if hasattr(self, "model") and self.model is not None:
+            self.ellipses_properties = self.model.refresh_ellipses_properties()
+
         equivalent_diameters = []
         for image in self.ellipses_properties:
             for ellipse in image:
@@ -2265,18 +2325,33 @@ class ResultsTabHandler(QThread):
 
         success_count = 0
         error_count = 0
+        Path(folder_path).mkdir(parents=True, exist_ok=True)
 
         for name in self.model.img_path_list:
-            state = self.model.img_dict.get(name)
-            if state and state.ellipses_on_images is not None and state.ellipses_on_images.size > 0:
+            annotated_img = self.model.get_or_render_annotated_image(name)
+            if annotated_img is not None and annotated_img.size > 0:
                 base_name = os.path.splitext(os.path.basename(name))[0]
                 export_path = os.path.join(folder_path, f"{base_name}_annotated.png")
                 try:
-                    cv2.imwrite(export_path, cv2.cvtColor(state.ellipses_on_images, cv2.COLOR_RGB2BGR))
-                    success_count += 1
+                    img_uint8 = np.asarray(annotated_img, dtype=np.uint8)
+                    if img_uint8.ndim == 3 and img_uint8.shape[2] == 3:
+                        bgr = cv2.cvtColor(img_uint8, cv2.COLOR_RGB2BGR)
+                    else:
+                        bgr = img_uint8
+                    success, enc = cv2.imencode(".png", bgr)
+                    if success:
+                        enc.tofile(export_path)
+                        success_count += 1
+                    else:
+                        if cv2.imwrite(export_path, bgr):
+                            success_count += 1
+                        else:
+                            error_count += 1
                 except Exception as e:
                     logging.error(f"Failed to export {name}: {e}")
                     error_count += 1
+            else:
+                error_count += 1
 
         QMessageBox.information(
             self.gui,
@@ -2346,6 +2421,9 @@ class ResultsTabHandler(QThread):
 
     def save_combined_data(self, export_path: str) -> None:
         """Save both ellipse data and config data to a single Excel file with multiple sheets."""
+        if hasattr(self, "model") and self.model is not None:
+            self.ellipses_properties = self.model.refresh_ellipses_properties()
+
         # Prepare ellipse data
         ellipse_headers = [
             "major_axis_length(px)",
@@ -2372,7 +2450,7 @@ class ResultsTabHandler(QThread):
                         circle["area"],
                         circle["perimeter"],
                         circle["eccentricity"],
-                        circle["filename"],
+                        circle.get("filename", ""),
                     ]
                 )
 
@@ -2922,6 +3000,7 @@ class MainHandler:
         results tab handler and triggers histogram generation to visualize
         the distribution of bubble sizes and other properties.
         """
+        self.image_processing_model.refresh_ellipses_properties()
         self.results_tab_handler.load_ellipse_properties(
             properties=self.image_processing_model.ellipses_properties,
             algorithm=self.image_processing_model.algorithm,
