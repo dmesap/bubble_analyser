@@ -137,6 +137,29 @@ class EllipseHandler:
         """
         self.filter_param_dict_1 = filter_param_dict_1
 
+    @staticmethod
+    def detect_background_label(labels: npt.NDArray[np.int_]) -> int:
+        """Infer the background label from border pixels instead of assuming 1.
+
+        Args:
+            labels: 2D integer labeled array.
+
+        Returns:
+            int: The inferred background label value.
+        """
+        if labels.size == 0:
+            return 1
+        border = np.concatenate(
+            [
+                labels[0, :].ravel(),
+                labels[-1, :].ravel(),
+                labels[:, 0].ravel(),
+                labels[:, -1].ravel(),
+            ]
+        )
+        values, counts = np.unique(border, return_counts=True)
+        return int(values[int(np.argmax(counts))])
+
     def filter_labels_properties(self) -> npt.NDArray[np.int_]:
         """Filters out regions (circles) from the labeled image based on their properties.
 
@@ -161,6 +184,8 @@ class EllipseHandler:
         else:
             raise ValueError("labels_before_filtering is None")
 
+        bg_label = self.detect_background_label(labels)
+
         max_eccentricity = float(self.filter_param_dict_1["max_eccentricity"])
         min_solidity = float(self.filter_param_dict_1["min_solidity"])
         min_circularity = float(self.filter_param_dict_1["min_circularity"])
@@ -172,7 +197,7 @@ class EllipseHandler:
         max_area_px = (np.pi * (max_size / 2) ** 2) / (mm2px**2)
 
         for prop in properties:
-            if prop.label == 1:  # Ignore the background
+            if prop.label == bg_label:  # Ignore the background
                 continue
 
             # Check all conditions and mark for removal if any fail
@@ -197,7 +222,7 @@ class EllipseHandler:
                     logging.debug(f"Filtered out by Circularity: {circularity:.2f}")
 
             if should_remove:
-                new_labels[tuple(prop.coords.T)] = 1
+                new_labels[tuple(prop.coords.T)] = bg_label
 
         self.labels_after_filtering = new_labels
 
@@ -216,9 +241,10 @@ class EllipseHandler:
 
         # Use regionprops for optimized component access
         properties = measure.regionprops(self.labels_after_filtering)
+        bg_label = self.detect_background_label(self.labels_after_filtering)
 
         for prop in properties:
-            if prop.label == 0 or prop.label == 1:
+            if prop.label == 0 or prop.label == bg_label:
                 continue
 
             # Create a small local mask for this bubble using its bounding box

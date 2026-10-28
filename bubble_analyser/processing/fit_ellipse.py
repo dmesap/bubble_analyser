@@ -11,16 +11,41 @@ from typing import cast
 import cv2
 import numpy as np
 from numpy import typing as npt
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QCloseEvent, QImage, QKeyEvent, QMouseEvent, QPixmap
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, Qt, Signal
+from PySide6.QtGui import QCloseEvent, QImage, QKeyEvent, QMouseEvent, QPixmap, QWheelEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
+
+from bubble_analyser.widgets.zoom_view import add_zoom_shortcuts, make_zoom_toolbar, wheel_zoom_factor
+
+
+class AdjusterImageLabel(QLabel):
+    """A custom QLabel for the EllipseAdjuster that forwards mouse and wheel events."""
+
+    def __init__(self, adjuster: "EllipseAdjuster") -> None:
+        super().__init__()
+        self.adjuster = adjuster
+        self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.setMouseTracking(True)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        self.adjuster.handle_mouse_press(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        self.adjuster.handle_mouse_move(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        self.adjuster.handle_mouse_release(event)
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        self.adjuster.handle_wheel(event)
 
 
 class EllipseAdjuster(QMainWindow):
@@ -64,6 +89,7 @@ class EllipseAdjuster(QMainWindow):
     # Signal to emit when the window is closed.
     # It sends the original image and the final ellipses list.
     finished = Signal(object, object)
+    zoom_changed = Signal(float)
 
     def __init__(
         self,
@@ -96,11 +122,21 @@ class EllipseAdjuster(QMainWindow):
         main_widget = QWidget()
         self.main_layout = QHBoxLayout(main_widget)
 
-        # Image display setup
-        self.image_label = QLabel()
-        self.image_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        self.image_label.setMouseTracking(True)
-        self.main_layout.addWidget(self.image_label, 85)
+        # Zoom & Pan state
+        self.zoom_level = 1.0
+        self.min_zoom = 0.1
+        self.max_zoom = 10.0
+        self.is_panning = False
+        self.last_pan_pos: QPoint | None = None
+
+        # Image display setup in a scroll area
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(False)
+        self.scroll_area.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.image_label = AdjusterImageLabel(self)
+        self.scroll_area.setWidget(self.image_label)
+        self.scroll_area.viewport().installEventFilter(self)
+        self.main_layout.addWidget(self.scroll_area, 85)
 
         self.ellipses: list[tuple[tuple[float, float], tuple[int, int], float]] = ellipse_list.copy()
         self.B = img_rgb.copy()
@@ -111,6 +147,16 @@ class EllipseAdjuster(QMainWindow):
         # Control panel setup
         control_panel = QWidget()
         control_layout = QVBoxLayout(control_panel)
+
+        # Zoom controls
+        zoom_toolbar, self.zoom_label = make_zoom_toolbar(
+            self.zoom_in,
+            self.zoom_out,
+            self.zoom_fit,
+            self.zoom_100,
+            hint="",
+        )
+        control_layout.addLayout(zoom_toolbar)
 
         # Delete button
         self.delete_btn = QPushButton("Delete (D)")
@@ -134,14 +180,18 @@ class EllipseAdjuster(QMainWindow):
             "2. <b>Rotate:</b> Drag the magenta dots on the ring.<br>"
             "3. <b>Move:</b> Drag the cross at the center.<br>"
             "4. <b>Create:</b> Click 'Add a circle' (or 'A'), then drag on canvas.<br>"
-            "5. <b>Delete:</b> Select ellipse (red), click 'Delete' (or 'D').<br><br>"
+            "5. <b>Delete:</b> Select ellipse (red), click 'Delete' (or 'D').<br>"
+            "6. <b>Zoom:</b> Mouse wheel or + / - buttons.<br>"
+            "7. <b>Pan:</b> Middle-drag or Shift/Alt+drag.<br><br>"
             "<b>Keyboard Shortcuts:</b><br>"
             "<b>A:</b> Add circle<br>"
             "<b>D / Del:</b> Delete<br>"
             "<b>Space:</b> Move<br>"
             "<b>R:</b> Rotate<br>"
             "<b>X:</b> Scale Length<br>"
-            "<b>C:</b> Scale Width"
+            "<b>C:</b> Scale Width<br>"
+            "<b>+ / -:</b> Zoom in / out<br>"
+            "<b>0:</b> Fit image"
         )
         self.info_label = QLabel(instructions)
         self.info_label.setWordWrap(True)
@@ -152,6 +202,9 @@ class EllipseAdjuster(QMainWindow):
 
         self.main_layout.addWidget(control_panel, 15)
         self.setCentralWidget(main_widget)
+
+        # Add zoom shortcuts (Ctrl++, Ctrl+-, Ctrl+0, Ctrl+1, +, -, etc.)
+        add_zoom_shortcuts(self, self.zoom_in, self.zoom_out, self.zoom_fit, self.zoom_100)
 
         # State variables for ellipse manipulation
         self.dragging = False
@@ -201,19 +254,24 @@ class EllipseAdjuster(QMainWindow):
         """Updates the displayed image with the current list of ellipses.
 
         Copies the stored image (self.B) and draws the ellipses on it.
-        Then scales the image to a fixed width of 800 pixels while maintaining aspect ratio.
+        Then scales the image to the current zoom size while maintaining aspect ratio.
         Finally, converts the image to a QImage and displays it in the QLabel.
         """
         display_image = self.B.copy()
 
         height, width, _ = display_image.shape
-        self.scale_factor = self.window_width / width
+        self.scale_factor = (self.window_width / width) * self.zoom_level
 
         self.draw_ellipses(display_image, self.ellipses)
 
-        # Scale the image to a fixed width (800 pixels) while maintaining aspect ratio.
-        new_size = (self.window_width, int(height * self.scale_factor))
-        scaled_image = cv2.resize(display_image, new_size, interpolation=cv2.INTER_AREA)
+        new_width = max(1, round(width * self.scale_factor))
+        new_height = max(1, round(height * self.scale_factor))
+        new_size = (new_width, new_height)
+        scaled_image = cv2.resize(
+            display_image,
+            new_size,
+            interpolation=cv2.INTER_AREA if self.scale_factor < 1.0 else cv2.INTER_LINEAR,
+        )
 
         bytes_per_line = 3 * new_size[0]
         q_img = QImage(
@@ -224,6 +282,7 @@ class EllipseAdjuster(QMainWindow):
             QImage.Format.Format_BGR888,
         )
         self.image_label.setPixmap(QPixmap.fromImage(q_img))
+        self.image_label.setFixedSize(new_width, new_height)
 
     def draw_ellipses(
         self,
@@ -241,8 +300,8 @@ class EllipseAdjuster(QMainWindow):
             center is a tuple of (x, y) coordinates, axes is a tuple of (major, minor) axes lengths,
             and angle is the angle of the ellipse in degrees.
         """
-        line_width = round(self.line_width / self.scale_factor)
-        dot_size = round(self.dot_size / self.scale_factor)
+        line_width = max(1, round(self.line_width / self.scale_factor))
+        dot_size = max(1, round(self.dot_size / self.scale_factor))
         for idx, ellipse in enumerate(ellipses):
             # ellipse is a tuple: (center, axes, angle)
             center: tuple[float, float]
@@ -307,20 +366,21 @@ class EllipseAdjuster(QMainWindow):
 
             # Draw a cross at the center.
             center_int = (int(center[0]), int(center[1]))
-            cross_size = 7
+            cross_size = max(3, round(7 / self.scale_factor))
+            cross_width = max(1, round(2 / self.scale_factor))
             cv2.line(
                 image,
                 (center_int[0] - cross_size, center_int[1]),
                 (center_int[0] + cross_size, center_int[1]),
                 (255, 255, 0),
-                2,
+                cross_width,
             )
             cv2.line(
                 image,
                 (center_int[0], center_int[1] - cross_size),
                 (center_int[0], center_int[1] + cross_size),
                 (255, 255, 0),
-                2,
+                cross_width,
             )
 
             # Draw ellipse number label at the center
@@ -370,9 +430,135 @@ class EllipseAdjuster(QMainWindow):
                 # Draw a circle (e.g., magenta) for rotation handle.
                 cv2.circle(image, (rot_x, rot_y), dot_size, (255, 0, 255), -1)
 
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        """Filter events on scroll_area.viewport() for wheel zoom and panning."""
+        if (
+            hasattr(self, "scroll_area")
+            and self.scroll_area is not None
+            and watched is self.scroll_area.viewport()
+        ):
+            if event.type() == QEvent.Type.Wheel:
+                self.handle_wheel(cast(QWheelEvent, event))
+                return True
+            if event.type() == QEvent.Type.MouseButtonPress:
+                ev = cast(QMouseEvent, event)
+                if ev.button() == Qt.MouseButton.MiddleButton or (
+                    ev.button() == Qt.MouseButton.LeftButton
+                    and bool(ev.modifiers() & (Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.ShiftModifier))
+                ):
+                    self.start_panning(ev)
+                    return True
+            elif event.type() == QEvent.Type.MouseMove and self.is_panning:
+                self.update_panning(cast(QMouseEvent, event))
+                return True
+            elif event.type() == QEvent.Type.MouseButtonRelease and self.is_panning:
+                self.stop_panning(cast(QMouseEvent, event))
+                return True
+        return super().eventFilter(watched, event)
+
+    def handle_wheel(self, event: QWheelEvent) -> None:
+        """Handle wheel events for zooming centered on cursor."""
+        factor = wheel_zoom_factor(event)
+        if factor is not None:
+            self.set_zoom(self.zoom_level * factor, event.position())
+        if hasattr(event, "accept"):
+            event.accept()
+
+    def set_zoom(self, new_zoom: float, viewport_anchor: QPointF | None = None) -> None:
+        """Set zoom level, keeping the image point under viewport_anchor stationary."""
+        old_zoom = self.zoom_level
+        self.zoom_level = min(self.max_zoom, max(self.min_zoom, new_zoom))
+        if abs(self.zoom_level - old_zoom) < 1e-4:
+            return
+
+        viewport = self.scroll_area.viewport()
+        if viewport_anchor is None:
+            anchor_pt = QPoint(viewport.width() // 2, viewport.height() // 2)
+        else:
+            anchor_pt = viewport_anchor.toPoint()
+
+        # Coordinates on image_label before scaling:
+        label_pos = self.image_label.mapFrom(viewport, anchor_pt)
+        img_x = label_pos.x() / max(self.scale_factor, 1e-6)
+        img_y = label_pos.y() / max(self.scale_factor, 1e-6)
+
+        # Update image with new zoom
+        self.update_image()
+
+        # Align scrollbars back on anchor
+        new_label_x = img_x * self.scale_factor
+        new_label_y = img_y * self.scale_factor
+        scroll_x = round(new_label_x - anchor_pt.x())
+        scroll_y = round(new_label_y - anchor_pt.y())
+        self.scroll_area.horizontalScrollBar().setValue(scroll_x)
+        self.scroll_area.verticalScrollBar().setValue(scroll_y)
+
+        if hasattr(self, "zoom_label") and self.zoom_label is not None:
+            self.zoom_label.setText(f"{self.zoom_level * 100:.0f} %")
+        self.zoom_changed.emit(self.zoom_level)
+
+    def zoom_in(self) -> None:
+        """Zoom in by one step."""
+        self.set_zoom(self.zoom_level * 1.25)
+
+    def zoom_out(self) -> None:
+        """Zoom out by one step."""
+        self.set_zoom(self.zoom_level / 1.25)
+
+    def zoom_fit(self) -> None:
+        """Fit image width to standard view."""
+        self.set_zoom(1.0)
+
+    def zoom_100(self) -> None:
+        """Set zoom so 1 screen pixel equals 1 image pixel."""
+        height, width, _ = self.B.shape
+        self.set_zoom(width / self.window_width)
+
+    def start_panning(self, event: QMouseEvent) -> None:
+        """Start panning with middle-drag or modified left-drag."""
+        self.is_panning = True
+        self.last_pan_pos = event.globalPosition().toPoint()
+        self.image_label.setCursor(Qt.CursorShape.ClosedHandCursor)
+        self.scroll_area.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def update_panning(self, event: QMouseEvent) -> None:
+        """Update scrollbar positions while panning."""
+        if not self.is_panning or self.last_pan_pos is None:
+            return
+        current_pos = event.globalPosition().toPoint()
+        delta = current_pos - self.last_pan_pos
+        self.scroll_area.horizontalScrollBar().setValue(
+            self.scroll_area.horizontalScrollBar().value() - delta.x()
+        )
+        self.scroll_area.verticalScrollBar().setValue(
+            self.scroll_area.verticalScrollBar().value() - delta.y()
+        )
+        self.last_pan_pos = current_pos
+
+    def stop_panning(self, event: QMouseEvent) -> None:
+        """Stop panning."""
+        self.is_panning = False
+        self.last_pan_pos = None
+        self.image_label.unsetCursor()
+        self.scroll_area.viewport().unsetCursor()
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        """Handle keyboard events for Blender-like interaction modes."""
+        """Handle keyboard events for Blender-like interaction modes and zoom."""
         key = event.key()
+
+        # Handle zoom shortcuts
+        if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+            self.zoom_in()
+            return
+        if key == Qt.Key.Key_Minus:
+            self.zoom_out()
+            return
+        if key == Qt.Key.Key_0:
+            self.zoom_fit()
+            return
+        if key == Qt.Key.Key_1:
+            self.zoom_100()
+            return
 
         # Handle 'A' key for adding new circle (no selection required)
         if key == Qt.Key.Key_A and not self.mode_active:
@@ -421,10 +607,9 @@ class EllipseAdjuster(QMainWindow):
         self.s_key_pressed = False  # Reset s key state
 
         # Get current mouse position as reference
-        cursor_pos = self.mapFromGlobal(self.cursor().pos())
-        label_pos = self.image_label.mapFromParent(cursor_pos)
-        x = label_pos.x() / self.scale_factor
-        y = label_pos.y() / self.scale_factor
+        label_pos = self.image_label.mapFromGlobal(self.cursor().pos())
+        x = label_pos.x() / max(self.scale_factor, 1e-6)
+        y = label_pos.y() / max(self.scale_factor, 1e-6)
         self.mode_reference_point = (x, y)
 
         # Store initial values for the selected ellipse
@@ -446,10 +631,9 @@ class EllipseAdjuster(QMainWindow):
 
     def get_current_mouse_position(self) -> tuple[float, float]:
         """Get current mouse position relative to the image."""
-        cursor_pos = self.mapFromGlobal(self.cursor().pos())
-        label_pos = self.image_label.mapFromParent(cursor_pos)
-        x = label_pos.x() / self.scale_factor
-        y = label_pos.y() / self.scale_factor
+        label_pos = self.image_label.mapFromGlobal(self.cursor().pos())
+        x = label_pos.x() / max(self.scale_factor, 1e-6)
+        y = label_pos.y() / max(self.scale_factor, 1e-6)
         return (x, y)
 
     def add_circle_button_clicked(self) -> None:
@@ -458,8 +642,16 @@ class EllipseAdjuster(QMainWindow):
         self.add_circle_btn.setText("Adding...")
         self.add_circle_btn.setStyleSheet("background-color: red; color: white;")
 
-    def mousePressEvent(self, event: QMouseEvent) -> None:
+    def handle_mouse_press(self, event: QMouseEvent) -> None:
         """Called when the user presses a mouse button."""
+        # Panning with middle-click or modified left-click
+        if event.button() == Qt.MouseButton.MiddleButton or (
+            event.button() == Qt.MouseButton.LeftButton
+            and bool(event.modifiers() & (Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.ShiftModifier))
+        ):
+            self.start_panning(event)
+            return
+
         if event.button() == Qt.MouseButton.LeftButton:
             # Left click exits keyboard modes
             if self.keyboard_mode is not None:
@@ -491,8 +683,8 @@ class EllipseAdjuster(QMainWindow):
 
         # Convert global mouse position to image_label coordinate system.
         label_pos = self.image_label.mapFromGlobal(event.globalPosition().toPoint())
-        x = label_pos.x() / self.scale_factor
-        y = label_pos.y() / self.scale_factor
+        x = label_pos.x() / max(self.scale_factor, 1e-6)
+        y = label_pos.y() / max(self.scale_factor, 1e-6)
 
         # If we're in "adding new circle" mode, start drag-to-create.
         if self.adding_new_circle:
@@ -558,9 +750,10 @@ class EllipseAdjuster(QMainWindow):
                 *rot_handles,
             ]
 
-            # Check each control point.
+            # Check each control point in screen coordinates so hit detection is zoom-invariant
             for j, point in enumerate(control_points):
-                if np.linalg.norm(np.array(point) - np.array((x, y))) < 20:
+                screen_dist = np.linalg.norm(np.array(point) - np.array((x, y))) * self.scale_factor
+                if screen_dist < 20:
                     self.selected_ellipse_index = i
                     self.selected_ellipse = i
                     self.selected_point = (x, y)
@@ -581,11 +774,19 @@ class EllipseAdjuster(QMainWindow):
         if prev_selected != self.selected_ellipse_index:
             self.update_image()
 
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        """Handles mouse move events for adjusting ellipses."""
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """Forward mouse press to handle_mouse_press."""
+        self.handle_mouse_press(event)
+
+    def handle_mouse_move(self, event: QMouseEvent) -> None:
+        """Handles mouse move events for adjusting ellipses and panning."""
+        if self.is_panning:
+            self.update_panning(event)
+            return
+
         label_pos = self.image_label.mapFromGlobal(event.globalPosition().toPoint())
-        x = label_pos.x() / self.scale_factor
-        y = label_pos.y() / self.scale_factor
+        x = label_pos.x() / max(self.scale_factor, 1e-6)
+        y = label_pos.y() / max(self.scale_factor, 1e-6)
 
         # Handle keyboard-triggered modes
         if self.keyboard_mode is not None and self.selected_ellipse_index is not None and self.mode_initial_values:
@@ -661,6 +862,50 @@ class EllipseAdjuster(QMainWindow):
         self.selected_point = (x, y)
         self.update_image()
 
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        """Forward mouse move to handle_mouse_move."""
+        self.handle_mouse_move(event)
+
+    def handle_mouse_release(self, event: QMouseEvent) -> None:
+        """Handles mouse release events for adjusting ellipses and panning."""
+        if self.is_panning:
+            if event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton):
+                self.stop_panning(event)
+                return
+
+        # Handle completion of drag-to-create circle
+        if self.creating_new_circle:
+            self.creating_new_circle = False
+            self.new_circle_center = cast(tuple[float, float], None)
+            self.adding_new_circle = False
+            self.temp_circle_index = cast(int, None)
+
+            # Reset button appearance
+            self.add_circle_btn.setText("Add a circle")
+            self.add_circle_btn.setStyleSheet("")
+            self.update_image()
+            return
+
+        # Don't reset states if in keyboard mode
+        if self.keyboard_mode is not None:
+            return
+
+        # Existing release logic
+        self.dragging = False
+        self.moving_center = False
+        self.rotating = False
+        self.selected_ellipse = cast(int, None)
+        self.selected_point = cast(tuple[float, float], None)
+        self.selected_axis = cast(int, None)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        """Forward mouse release to handle_mouse_release."""
+        self.handle_mouse_release(event)
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        """Forward wheel event to handle_wheel."""
+        self.handle_wheel(event)
+
     def handle_keyboard_mode_movement(self, x: float, y: float) -> None:
         """Handle mouse movement during keyboard modes."""
         if self.selected_ellipse_index is None or not self.mode_initial_values:
@@ -715,33 +960,6 @@ class EllipseAdjuster(QMainWindow):
             self.ellipses[self.selected_ellipse_index] = (initial_center, new_axes, initial_angle)
 
         self.update_image()
-
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        """Handles mouse release events for adjusting ellipses."""
-        # Handle completion of drag-to-create circle
-        if self.creating_new_circle:
-            self.creating_new_circle = False
-            self.new_circle_center = cast(tuple[float, float], None)
-            self.adding_new_circle = False
-            self.temp_circle_index = cast(int, None)
-
-            # Reset button appearance
-            self.add_circle_btn.setText("Add a circle")
-            self.add_circle_btn.setStyleSheet("")
-            self.update_image()
-            return
-
-        # Don't reset states if in keyboard mode
-        if self.keyboard_mode is not None:
-            return
-
-        # Existing release logic
-        self.dragging = False
-        self.moving_center = False
-        self.rotating = False
-        self.selected_ellipse = cast(int, None)
-        self.selected_point = cast(tuple[float, float], None)
-        self.selected_axis = cast(int, None)
 
     def delete_selected_ellipse(self) -> None:
         """Deletes the currently selected ellipse.

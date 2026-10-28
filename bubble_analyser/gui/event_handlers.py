@@ -24,7 +24,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import cv2
 import numpy as np
@@ -407,11 +407,17 @@ class FolderTabHandler:
         Loads the selected image from the list and displays it in the preview area,
         maintaining the aspect ratio.
         """
-        selected_image = self.gui.image_list.currentItem().text()
+        current_item = self.gui.image_list.currentItem()
+        if current_item is None:
+            return
+        selected_image = current_item.text()
         folder_path = self.gui.folder_path_edit.text()
-        image_path = folder_path + "/" + selected_image
+        if not folder_path or not selected_image:
+            return
+        image_path = os.path.join(folder_path, selected_image)
+        if not os.path.exists(image_path):
+            return
         pixmap = QPixmap(image_path)
-
         self.gui.image_preview.set_preview_pixmap(pixmap)
 
     def _show_warning(self, title: str, message: str) -> None:
@@ -576,17 +582,34 @@ class CalibrationTabHandler:
             self._show_warning("Selection Locked", "You have already confirmed the calibration.")
             return
 
-        self.calibration_model.bknd_img_path = Path(self.gui.bg_corr_image_name.text())
-        self.calibration_model.px2mm_display = float(self.gui.manual_px_mm_input.text())
-        # self.calibration_model.px2mm = self.calibration_model.px2mm_display * self.img_resample
-        self.calibration_model.px2mm = self.calibration_model.px2mm_display
+        px_text = self.gui.manual_px_mm_input.text().strip()
+        try:
+            val = float(px_text)
+            if val <= 0:
+                raise ValueError("Value must be positive")
+        except ValueError:
+            self._show_warning(
+                "Invalid Calibration Ratio",
+                "Please enter a valid positive number for the pixel-to-millimeter ratio (px/mm).",
+            )
+            return
+
+        bg_text = self.gui.bg_corr_image_name.text().strip()
+        if bg_text and bg_text != "No background image selected" and os.path.isfile(bg_text):
+            self.calibration_model.bknd_img_path = Path(bg_text)
+            self.calibration_model.if_bknd = True
+        else:
+            self.calibration_model.bknd_img_path = cast(Path, None)
+            self.calibration_model.if_bknd = False
+
+        self.calibration_model.px2mm_display = val
+        self.calibration_model.px2mm = val
 
         self.calibration_model.confirm_calibration()
 
         self.gui.tabs.setCurrentIndex(self.gui.tabs.indexOf(self.gui.image_processing_tab))
         self.preview_image_intialize()
         logging.info(f"Pixel to millimeter ratio locked as: {self.calibration_model.px2mm_display:.3f}")
-        # logging.info(f"Real pixel to millimeter ratio locked as: {self.calibration_model.px2mm_display:.3f}")
         logging.info(f"Background image path locked as: {self.calibration_model.bknd_img_path}")
         logging.info("Calibration confirmed and locked.")
         logging.info("******************************Parameter Adjustment Session******************************")
@@ -597,8 +620,13 @@ class CalibrationTabHandler:
         Loads the selected image from the list and displays it in the preview area,
         maintaining the aspect ratio.
         """
+        if self.gui.image_list.count() == 0:
+            return
         self.gui.image_list.setCurrentRow(0)
-        selected_image = self.gui.image_list.currentItem().text()
+        current_item = self.gui.image_list.currentItem()
+        if current_item is None:
+            return
+        selected_image = current_item.text()
         folder_path = self.gui.folder_path_edit.text()
         image_path = folder_path + "/" + selected_image
         pixmap = QPixmap(image_path)
@@ -2708,59 +2736,67 @@ class MainHandler:
         Removes signal-slot connections between GUI components and their respective
         handlers to prevent further event handling and interaction.
         """
+        def _safe_disconnect(signal: Any, slot: Any = None) -> None:
+            try:
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    if slot is not None:
+                        signal.disconnect(slot)
+                    else:
+                        signal.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+
         # menubar
-        self.gui.export_setting_action.triggered.disconnect(self.menubar_open_export_settings_dialog)
-        self.gui.restart_action.triggered.disconnect(self.menubar_ask_if_restart)
-        self.gui.restart_button.clicked.disconnect(self.menubar_ask_if_restart)
+        _safe_disconnect(self.gui.export_setting_action.triggered, self.menubar_open_export_settings_dialog)
+        _safe_disconnect(self.gui.restart_action.triggered, self.menubar_ask_if_restart)
+        _safe_disconnect(self.gui.restart_button.clicked, self.menubar_ask_if_restart)
 
         # folder tab
-        self.gui.folder_path_edit.setText(str(self.folder_tab_handler.image_path))
-        self.gui.select_folder_button.clicked.disconnect(self.tab1_select_folder)
-        self.gui.confirm_folder_button.clicked.disconnect(self.tab1_confirm_folder_selection)
-        self.gui.image_list.clicked.disconnect(self.folder_tab_handler.preview_image_folder_tab)
+        _safe_disconnect(self.gui.select_folder_button.clicked, self.tab1_select_folder)
+        _safe_disconnect(self.gui.confirm_folder_button.clicked, self.tab1_confirm_folder_selection)
+        _safe_disconnect(self.gui.image_list.clicked, self.folder_tab_handler.preview_image_folder_tab)
 
         # calibration tab
-        self.gui.pixel_img_name.setText(str(self.calibration_tab_handler.px_img_path))
-        self.gui.pixel_img_select_button.clicked.disconnect(self.tab2_select_ruler_button)
-        self.gui.bg_corr_select_button.clicked.disconnect(self.tab2_select_bg_corr_image)
-        self.gui.confirm_px_mm_button.clicked.disconnect(
-            self.tab2_confirm_calibration
-        )  # Connect confirm button to the handler
+        _safe_disconnect(self.gui.pixel_img_select_button.clicked, self.tab2_select_ruler_button)
+        _safe_disconnect(self.gui.bg_corr_select_button.clicked, self.tab2_select_bg_corr_image)
+        _safe_disconnect(self.gui.confirm_px_mm_button.clicked, self.tab2_confirm_calibration)
 
         # image processing tab
         # column 1
-        self.gui.prev_button.clicked.disconnect()
-        self.gui.next_button.clicked.disconnect()
-        self.gui.preview_processed_images_button.clicked.disconnect(self.tab3_preview_processed_images)
+        _safe_disconnect(self.gui.prev_button.clicked)
+        _safe_disconnect(self.gui.next_button.clicked)
+        _safe_disconnect(self.gui.preview_processed_images_button.clicked, self.tab3_preview_processed_images)
         # column 2
-        self.image_processing_tab_handler.initialize_algorithm_combo()
-        self.gui.algorithm_combo.currentTextChanged.disconnect()
-        self.tab3_load_parameter_table_1(self.gui.algorithm_combo.currentText())
-        self.gui.preview_button1.clicked.disconnect(self.tab3_confirm_parameter_before_filtering)
+        _safe_disconnect(self.gui.algorithm_combo.currentTextChanged)
+        _safe_disconnect(self.gui.preview_button1.clicked, self.tab3_confirm_parameter_before_filtering)
         # column 3
-        self.tab3_initialize_parameter_table_2()
-        self.gui.manual_adjustment_button.clicked.disconnect(self.tab3_ellipse_manual_adjustment)
-        self.gui.preview_button2.clicked.disconnect(self.tab3_confirm_parameter_for_filtering)
-        self.gui.batch_process_button.clicked.disconnect(self.tab3_ask_if_batch)
-        self.gui.finalise_analysis_button.clicked.disconnect(self.tab3_finalise_analysis)
+        _safe_disconnect(self.gui.manual_adjustment_button.clicked, self.tab3_ellipse_manual_adjustment)
+        _safe_disconnect(self.gui.preview_button2.clicked, self.tab3_confirm_parameter_for_filtering)
+        _safe_disconnect(self.gui.batch_process_button.clicked, self.tab3_ask_if_batch)
+        _safe_disconnect(self.gui.finalise_analysis_button.clicked, self.tab3_finalise_analysis)
 
         # results tab
-        self.gui.pdf_checkbox.stateChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.cdf_checkbox.stateChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.bins_spinbox.valueChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.min_x_axis_input.textChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.max_x_axis_input.textChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.legend_position_combobox.currentIndexChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.d32_checkbox.stateChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.dmean_checkbox.stateChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.dxy_checkbox.stateChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.dxy_x_input.textChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.dxy_y_input.textChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.save_button.clicked.disconnect()
-        self.gui.export_images_button.clicked.disconnect()
-        self.gui.export_ml_button.clicked.disconnect()
+        _safe_disconnect(self.gui.histogram_by.currentIndexChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.pdf_checkbox.stateChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.cdf_checkbox.stateChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.bins_spinbox.valueChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.min_x_axis_input.textChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.max_x_axis_input.textChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(
+            self.gui.legend_position_combobox.currentIndexChanged, self.results_tab_handler.generate_histogram
+        )
+        _safe_disconnect(self.gui.d32_checkbox.stateChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.dmean_checkbox.stateChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.dxy_checkbox.stateChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.dxy_x_input.textChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.dxy_y_input.textChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.save_button.clicked)
+        _safe_disconnect(self.gui.export_images_button.clicked)
+        _safe_disconnect(self.gui.export_ml_button.clicked)
 
-        self.image_processing_tab_handler.batch_processing_done.disconnect(self.start_generate_histogram)
+        _safe_disconnect(self.image_processing_tab_handler.batch_processing_done, self.start_generate_histogram)
 
     def disconnect_handlers_signals(self) -> None:
         """Disconnect signals between handlers to prevent further event handling.
@@ -2768,27 +2804,41 @@ class MainHandler:
         Removes signal-slot connections between handlers to prevent further event
         handling and interaction.
         """
-        self.image_processing_tab_handler.batch_processing_done.disconnect()
+        try:
+            self.image_processing_tab_handler.batch_processing_done.disconnect()
+        except (RuntimeError, TypeError):
+            pass
 
     def clear_all_gui_contents(self) -> None:
         """Clear all contents from the GUI components.
 
         Clears all contents from all GUI components to reset the application state.
         """
+        self.gui.folder_path_edit.clear()
         self.gui.image_list.clear()
+        self.gui.image_preview.clear()
 
+        self.gui.pixel_img_name.setText("Select Pixel Calibration Image")
         self.gui.pixel_img_preview.clear()
+        self.gui.bg_corr_image_name.setText("No background image selected")
         self.gui.bg_corr_image_preview.clear()
         self.gui.manual_px_mm_input.clear()
 
         self.gui.sample_image_preview.clear()
+        self.gui.sample_image_info_label.setText("No image selected")
         self.gui.label_before_filtering.axes.clear()
         self.gui.label_before_filtering.draw()
         self.gui.processed_image_preview.axes.clear()
         self.gui.processed_image_preview.draw()
+        self.gui.param_sandbox1.setRowCount(0)
+        self.gui.param_sandbox2.setRowCount(0)
 
+        self.gui.descriptive_size_label.setText("")
         self.gui.histogram_canvas.axes.clear()
         self.gui.histogram_canvas.draw()
+        self.image_processing_tab_handler.current_index = 0
+        if hasattr(self.gui, "tabs") and hasattr(self.gui, "folder_tab"):
+            self.gui.tabs.setCurrentIndex(self.gui.tabs.indexOf(self.gui.folder_tab))
 
     def restart(self) -> None:
         """Restart the application.

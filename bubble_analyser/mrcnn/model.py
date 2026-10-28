@@ -32,7 +32,7 @@ KE = KL
 import tensorflow as tf
 
 # Requires TensorFlow 1.3+ and Keras 2.0.8+.
-from distutils.version import LooseVersion
+from packaging.version import Version
 
 # For callback mAP
 from tensorflow.keras.callbacks import Callback
@@ -41,8 +41,8 @@ from bubble_analyser.mrcnn import utils
 from bubble_analyser.mrcnn.config import Config
 from bubble_analyser.mrcnn.utils import Dataset
 
-assert LooseVersion(tf.__version__) >= LooseVersion("1.3")
-assert LooseVersion(keras.__version__) >= LooseVersion("2.0.8")
+assert Version(tf.__version__) >= Version("1.3")
+assert Version(keras.__version__) >= Version("2.0.8")
 
 
 ############################################################
