@@ -73,17 +73,22 @@ class WeightsDownloadThread(QThread):
     progress_changed = Signal(int)
     finished_download = Signal(bool, str)
 
+    def __init__(self, filename: str = "mask_rcnn_bubble.h5", url: str | None = None) -> None:
+        super().__init__()
+        self.filename = filename
+        self.url = url
+
     def run(self) -> None:
         """Execute the weight download process."""
         try:
             import requests
 
-            try:
-                import bubble_analyser.weights.loader as weights_loader
-
-                url = getattr(weights_loader, "WEIGHTS_URL")
-            except (ImportError, AttributeError):
-                url = "https://github.com/ImperialCollegeLondon/bubble_analyser/releases/download/v0.3.0/mask_rcnn_bubble.h5"
+            url = self.url
+            if not url:
+                if self.filename == "mask_rcnn_bubble.h5":
+                    url = "https://github.com/ImperialCollegeLondon/bubble_analyser/releases/download/v0.3.0/mask_rcnn_bubble.h5"
+                else:
+                    url = f"https://github.com/ImperialCollegeLondon/bubble_analyser/releases/download/v2.0.0/{self.filename}"
 
             if getattr(sys, "frozen", False):
                 base_dir = getattr(sys, "_MEIPASS", "")
@@ -92,7 +97,7 @@ class WeightsDownloadThread(QThread):
 
             weights_dir = os.path.join(base_dir, "bubble_analyser", "weights")
             os.makedirs(weights_dir, exist_ok=True)
-            weights_path = os.path.join(weights_dir, "mask_rcnn_bubble.h5")
+            weights_path = os.path.join(weights_dir, self.filename)
 
             response = requests.get(url, stream=True, timeout=30)
             response.raise_for_status()
@@ -1158,6 +1163,70 @@ class ImageProcessingTabHandler(QThread):
         self.model.all_methods_n_params[algorithm] = cleaned
         self.model.methods_handler.full_dict[algorithm] = cleaned
 
+    def _revert_algorithm_selection(self) -> None:
+        """Revert algorithm combobox to the previously selected algorithm."""
+        self.gui.algorithm_combo.blockSignals(True)
+        self.gui.algorithm_combo.setCurrentText(getattr(self, "previous_algorithm", self.algorithm_list[0]))
+        self.gui.algorithm_combo.blockSignals(False)
+
+    def download_weights_dialog(self, filename: str, url: str | None = None) -> bool:
+        """Download weights file using a modal progress dialog."""
+        progress = QProgressDialog(
+            f"Downloading {filename}...\nThis may take a few minutes.",
+            "Cancel",
+            0,
+            100,
+            self.gui,
+        )
+        progress.setWindowTitle(f"Downloading {filename}")
+        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setValue(0)
+        progress.show()
+
+        loop = QEventLoop()
+        self._download_worker = WeightsDownloadThread(filename=filename, url=url)
+        download_success = [False]
+        download_completed = [False]
+
+        def on_finished(success: bool, msg: str) -> None:
+            download_completed[0] = True
+            download_success[0] = success
+            if not success:
+                self._show_warning("Download Failed", f"Failed to download {filename}: {msg}")
+            loop.quit()
+
+        def on_cancel() -> None:
+            if download_completed[0]:
+                return
+            self._download_worker.terminate()
+            self._download_worker.wait()
+            download_success[0] = False
+            loop.quit()
+
+        self._download_worker.progress_changed.connect(progress.setValue)
+        self._download_worker.finished_download.connect(on_finished)
+        progress.canceled.connect(on_cancel)
+        self._download_worker.start()
+        loop.exec()
+        progress.close()
+
+        return download_success[0]
+
+    def update_param_table_cell(self, param_name: str, new_value: str) -> None:
+        """Update a text value in the first parameter table by parameter name."""
+        for row in range(self.gui.param_sandbox1.rowCount()):
+            item = self.gui.param_sandbox1.item(row, 0)
+            if item and item.text() == param_name:
+                val_item = self.gui.param_sandbox1.item(row, 1)
+                if val_item:
+                    val_item.setText(new_value)
+                else:
+                    self.gui.param_sandbox1.setItem(row, 1, QTableWidgetItem(new_value))
+                break
+
     def handle_algorithm_change(self, new_algorithm: str) -> None:
         """Handle a change in the selected algorithm.
 
@@ -1177,7 +1246,7 @@ class ImageProcessingTabHandler(QThread):
         if is_ml_method:
             from bubble_analyser.weights.loader import get_weights_path
 
-            weights_path, _ = get_weights_path(download_if_missing=False)
+            weights_path, download_url = get_weights_path("mask_rcnn_bubble.h5", download_if_missing=False)
 
             if weights_path is None:
                 reply = QMessageBox.question(
@@ -1193,63 +1262,64 @@ class ImageProcessingTabHandler(QThread):
                 )
 
                 if reply == QMessageBox.StandardButton.Yes:
-                    progress = QProgressDialog(
-                        "Downloading weights file...\nThis may take a few minutes.",
-                        "Cancel",
-                        0,
-                        100,
-                        self.gui,
-                    )
-                    progress.setWindowTitle("Downloading...")
-                    progress.setWindowModality(Qt.WindowModality.ApplicationModal)
-                    progress.setMinimumDuration(0)
-                    progress.setAutoClose(False)
-                    progress.setAutoReset(False)
-                    progress.setValue(0)
-                    progress.show()
-
-                    loop = QEventLoop()
-                    self._download_worker = WeightsDownloadThread()
-                    download_success = [False]
-                    download_completed = [False]
-
-                    def on_finished(success: bool, msg: str) -> None:
-                        download_completed[0] = True
-                        download_success[0] = success
-                        if not success:
-                            self._show_warning("Download Failed", f"Failed to download weights: {msg}")
-                        loop.quit()
-
-                    def on_cancel() -> None:
-                        if download_completed[0]:
-                            return
-                        self._download_worker.terminate()
-                        self._download_worker.wait()
-                        download_success[0] = False
-                        loop.quit()
-
-                    self._download_worker.progress_changed.connect(progress.setValue)
-                    self._download_worker.finished_download.connect(on_finished)
-                    progress.canceled.connect(on_cancel)
-                    self._download_worker.start()
-                    loop.exec()
-                    progress.close()
-
-                    if not download_success[0]:
-                        self.gui.algorithm_combo.blockSignals(True)
-                        self.gui.algorithm_combo.setCurrentText(
-                            getattr(self, "previous_algorithm", self.algorithm_list[0])
-                        )
-                        self.gui.algorithm_combo.blockSignals(False)
+                    if not self.download_weights_dialog("mask_rcnn_bubble.h5", download_url):
+                        self._revert_algorithm_selection()
                         return
-
                     auto_run_after = True
                 else:
-                    # User declined to download, revert to previous selection
-                    self.gui.algorithm_combo.blockSignals(True)
-                    self.gui.algorithm_combo.setCurrentText(getattr(self, "previous_algorithm", self.algorithm_list[0]))
-                    self.gui.algorithm_combo.blockSignals(False)
+                    self._revert_algorithm_selection()
                     return
+
+        elif new_algorithm == "YOLO Segmentation":
+            from bubble_analyser.weights.loader import get_weights_path
+
+            yolo_params = self.model.all_methods_n_params.get("YOLO Segmentation", {})
+            current_path_str = str(yolo_params.get("weights_path", "")).strip()
+            current_path = Path(current_path_str).expanduser() if current_path_str else None
+
+            # If current configured path does not exist, check default location
+            if current_path is None or not current_path.is_file():
+                w_path, download_url = get_weights_path("yolo_bubble_seg.pt", download_if_missing=False)
+                if w_path and Path(w_path).is_file():
+                    yolo_params["weights_path"] = w_path
+                else:
+                    box = QMessageBox(self.gui)
+                    box.setWindowTitle("YOLO Weights Required")
+                    box.setIcon(QMessageBox.Icon.Information)
+                    box.setText(
+                        "The 'YOLO Segmentation' method requires a trained weights file (yolo_bubble_seg.pt).\n\n"
+                        "You can locate an existing .pt file on your computer, or download it from GitHub Releases."
+                    )
+                    locate_btn = box.addButton("Locate (.pt)...", QMessageBox.ButtonRole.ActionRole)
+                    download_btn = box.addButton("Download", QMessageBox.ButtonRole.AcceptRole)
+                    box.addButton(QMessageBox.StandardButton.Cancel)
+                    box.setDefaultButton(locate_btn)
+                    box.exec()
+
+                    clicked = box.clickedButton()
+                    if clicked == locate_btn:
+                        chosen, _ = QFileDialog.getOpenFileName(
+                            self.gui,
+                            "Select YOLO Segmentation Weights (.pt)",
+                            "",
+                            "YOLO Weights (*.pt);;All Files (*)",
+                        )
+                        if chosen and Path(chosen).is_file():
+                            yolo_params["weights_path"] = chosen
+                        else:
+                            self._revert_algorithm_selection()
+                            return
+                    elif clicked == download_btn:
+                        if self.download_weights_dialog("yolo_bubble_seg.pt", download_url):
+                            w_path, _ = get_weights_path("yolo_bubble_seg.pt", download_if_missing=False)
+                            if w_path:
+                                yolo_params["weights_path"] = w_path
+                        else:
+                            self._revert_algorithm_selection()
+                            return
+                    else:
+                        self._revert_algorithm_selection()
+                        return
 
         self.previous_algorithm = new_algorithm
 
@@ -1406,6 +1476,43 @@ class ImageProcessingTabHandler(QThread):
         weights_path = Path(str(params.get("weights_path", ""))).expanduser()
         selected_device = str(params.get("device", "CPU")).strip().lower()
         missing_items: list[str] = []
+
+        if not weights_path.is_file():
+            box = QMessageBox(self.gui)
+            box.setWindowTitle("YOLO Weights Not Found")
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setText(
+                "YOLO weights were not found at the configured path:\n"
+                f"{weights_path}\n\n"
+                "Would you like to locate your .pt model file, or attempt to download it?"
+            )
+            locate_btn = box.addButton("Locate (.pt)...", QMessageBox.ButtonRole.ActionRole)
+            download_btn = box.addButton("Download", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton(QMessageBox.StandardButton.Cancel)
+            box.setDefaultButton(locate_btn)
+            box.exec()
+
+            if box.clickedButton() == locate_btn:
+                chosen, _ = QFileDialog.getOpenFileName(
+                    self.gui,
+                    "Select YOLO Segmentation Weights (.pt)",
+                    "",
+                    "YOLO Weights (*.pt);;All Files (*)",
+                )
+                if chosen and Path(chosen).is_file():
+                    params["weights_path"] = chosen
+                    self.update_param_table_cell("weights_path", chosen)
+                    weights_path = Path(chosen)
+            elif box.clickedButton() == download_btn:
+                from bubble_analyser.weights.loader import get_weights_path
+
+                _, download_url = get_weights_path("yolo_bubble_seg.pt", download_if_missing=False)
+                if self.download_weights_dialog("yolo_bubble_seg.pt", download_url):
+                    w_path, _ = get_weights_path("yolo_bubble_seg.pt", download_if_missing=False)
+                    if w_path:
+                        params["weights_path"] = w_path
+                        self.update_param_table_cell("weights_path", w_path)
+                        weights_path = Path(w_path)
 
         if not weights_path.is_file():
             missing_items.append(
