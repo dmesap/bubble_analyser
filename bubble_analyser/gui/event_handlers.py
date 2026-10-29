@@ -1380,6 +1380,10 @@ class ImageProcessingTabHandler(QThread):
                         return
 
         # self.pass_segment_params(self.model.segment_param_dict)
+        if not self.model.img_path_list:
+            logging.info("Parameters updated; skipping Step 1 processing because no images are loaded.")
+            return
+
         self._process_step_1()
 
     def convert_value(self, text: str) -> int | float | str:
@@ -1694,6 +1698,10 @@ class ImageProcessingTabHandler(QThread):
                 return
 
         self.pass_filter_params()
+        if not self.model.img_path_list:
+            logging.info("Parameters updated; skipping Step 2 processing because no images are loaded.")
+            return
+
         self._process_step_2()
 
     def store_filter_params(self) -> None:
