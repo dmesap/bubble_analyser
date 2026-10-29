@@ -58,7 +58,7 @@ disallow_any_generics = false
 warn_unreachable = false
 warn_unused_ignores = false
 disallow_untyped_defs = true
-exclude = [".venv/", "dist/", "build/", "internal_optimization/"]
+exclude = [".venv/", "dist/", "build/", "internal_optimization/", "tools/"]
 
 [[tool.mypy.overrides]]
 module = "tests.*"
@@ -76,7 +76,8 @@ module = [
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-addopts = "-v --mypy -p no:warnings --cov=bubble_analyser --cov-report=html --doctest-modules --ignore=bubble_analyser/__main__.py --ignore=bubble_analyser/mrcnn/ --ignore=examples/ --ignore=tests/test_on_methods.py --ignore=tests/profile_bubmask.py"
+testpaths = ["tests", "bubble_analyser"]
+addopts = "-v --mypy -p no:warnings --cov=bubble_analyser --cov-report=html --doctest-modules --ignore=bubble_analyser/__main__.py --ignore=bubble_analyser/mrcnn/ --ignore=examples/ --ignore=tools/ --ignore=tests/test_on_methods.py --ignore=tests/profile_bubmask.py"
 
 [tool.ruff]
 target-version = "py312"
