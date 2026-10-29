@@ -6,7 +6,7 @@ of bubble measurements when automatic detection is not perfect.
 """
 
 import math
-from typing import cast
+from typing import Any, cast
 
 import cv2
 import numpy as np
@@ -93,8 +93,8 @@ class EllipseAdjuster(QMainWindow):
 
     def __init__(
         self,
-        ellipse_list: list[tuple[tuple[float, float], tuple[int, int], float]],
-        img_rgb: npt.NDArray[np.int_],
+        ellipse_list: list[tuple[tuple[float, float], tuple[float, float], float]],
+        img_rgb: npt.NDArray[Any],
     ) -> None:
         """Constructor for EllipseAdjuster.
 
@@ -138,7 +138,7 @@ class EllipseAdjuster(QMainWindow):
         self.scroll_area.viewport().installEventFilter(self)
         self.main_layout.addWidget(self.scroll_area, 85)
 
-        self.ellipses: list[tuple[tuple[float, float], tuple[int, int], float]] = ellipse_list.copy()
+        self.ellipses: list[tuple[tuple[float, float], tuple[float, float], float]] = list(ellipse_list)
         self.B = img_rgb.copy()
         self.window_width = 1200
         self.line_width = 2

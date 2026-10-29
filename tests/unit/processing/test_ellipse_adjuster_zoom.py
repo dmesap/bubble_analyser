@@ -14,8 +14,8 @@ def qapp():
 
 def _make_dummy_adjuster(width: int = 1200, height: int = 800) -> EllipseAdjuster:
     img = np.zeros((height, width, 3), dtype=np.uint8)
-    # Circle at (600, 400), axes (100, 100), angle 0
-    ellipses = [((600.0, 400.0), (100, 100), 0.0)]
+    # Circle at (600, 400), axes (100.0, 100.0), angle 0
+    ellipses = [((600.0, 400.0), (100.0, 100.0), 0.0)]
     adjuster = EllipseAdjuster(ellipses, img)
     return adjuster
 
