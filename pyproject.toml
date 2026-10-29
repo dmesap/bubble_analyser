@@ -4,7 +4,8 @@ version = "2.0.0"
 description = "[Description for project.]"
 authors = [
     "Dr Diego Mesa <d.mesa@ic.ac.uk>",
-    "Mr Yiyang Guan"
+    "Mr Yiyang Guan",
+    "Mr Bastian Valdivia-Muñoz <bastian.valdivia.m@gmail.com>"
 ]
 
 [tool.poetry.dependencies]

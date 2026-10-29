@@ -113,7 +113,8 @@ This project is licensed under the GNU General Public License v3.0 - see the [LI
 ## Authors
 
 - Dr Diego Mesa (Main Author) - Department of Earth Science and Engineering, Imperial College London, United Kingdom
-- Mr Yiyang Guan - Department of Earth Science and Engineering, Imperial College London, United Kingdom
+- Mr Yiyang Guan - Curtin University, Australia
+- Mr Bastian Valdivia-Muñoz - Universidad de Talca, Chile
 
 ### Past Collaborators
 
