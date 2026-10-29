@@ -50,6 +50,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from bubble_analyser.widgets.zoom_view import ZoomablePreviewLabel
+
 
 class SpinnerWidget(QWidget):
     """A custom widget that displays a rotating spinner animation.
@@ -302,7 +304,7 @@ class MainWindow(QMainWindow):
         # Bottom Right: Image Preview
         bottom_right_frame = QFrame()
         bottom_right_layout = QVBoxLayout(bottom_right_frame)
-        self.image_preview = QLabel()
+        self.image_preview = ZoomablePreviewLabel(viewer_title="Image preview")
         self.image_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_preview.setFixedSize(600, 600)  # Set a fixed size for the image preview
         bottom_right_layout.addWidget(self.image_preview)
@@ -353,7 +355,7 @@ class MainWindow(QMainWindow):
         # self.pixel_img_name.setText(str(self.calibration_tab_handler.px_img_path))
         self.pixel_img_select_button = QPushButton("Select ruler image")
         # self.pixel_img_select_button.clicked.connect(self.main_handler.tab2_select_ruler_button)
-        self.pixel_img_preview = QLabel()
+        self.pixel_img_preview = ZoomablePreviewLabel(viewer_title="Ruler image")
         self.pixel_img_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.pixel_img_preview.setFixedSize(400, 300)
 
@@ -373,7 +375,7 @@ class MainWindow(QMainWindow):
         # bg_corr_confirm_button.clicked.connect(self.confirm_bg_corr_image)
         self.bg_corr_select_button = QPushButton("Select background image (optional)")
         # self.bg_corr_select_button.clicked.connect(self.main_handler.tab2_select_bg_corr_image)
-        self.bg_corr_image_preview = QLabel()
+        self.bg_corr_image_preview = ZoomablePreviewLabel(viewer_title="Background image")
         self.bg_corr_image_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.bg_corr_image_preview.setFixedSize(400, 300)
 
@@ -443,7 +445,7 @@ class MainWindow(QMainWindow):
         first_column_layout = QVBoxLayout(first_column_frame)
 
         # Sample Image Preview Canvas
-        self.sample_image_preview = QLabel("Sample image preview")
+        self.sample_image_preview = ZoomablePreviewLabel("Sample image preview", viewer_title="Sample image")
         self.sample_image_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.sample_image_preview.setFixedSize(400, 300)  # Adjust size as needed
         self.prev_button = QPushButton("< Prev. Img")
@@ -647,8 +649,8 @@ class MainWindow(QMainWindow):
         # Export annotated images button
         self.export_images_button = QPushButton("Export Annotated Images")
 
-        # Export ML training data button
-        self.export_ml_button = QPushButton("Export ML Training Data")
+        # Export the corrected segmentations as a dataset (format chosen in a dialog)
+        self.export_ml_button = QPushButton("Export Dataset (choose format)")
 
         # Restart button (new addition)
         self.restart_button = QPushButton("Restart New Mission")

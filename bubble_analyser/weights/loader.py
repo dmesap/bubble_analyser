@@ -12,18 +12,19 @@ def get_weights_path(
     If missing and download_if_missing is True, fetches via terminal (tqdm).
     If False, returns (None, url) so the GUI can handle the download thread.
     """
-    # Use the path where this file lives [cite: 50]
     weights_dir = Path(__file__).parent
     local_path = weights_dir / filename
 
-    # Your specific GitHub Release URL
-    url = f"https://github.com/ImperialCollegeLondon/bubble_analyser/releases/download/v0.3.0/{filename}"
+    if filename == "mask_rcnn_bubble.h5":
+        url = f"https://github.com/ImperialCollegeLondon/bubble_analyser/releases/download/v0.3.0/{filename}"
+    else:
+        url = f"https://github.com/ImperialCollegeLondon/bubble_analyser/releases/download/v2.0.0/{filename}"
 
     if local_path.exists():
         return str(local_path), None
 
     if not download_if_missing:
-        # Return the URL so the PySide6 GUI can download it without freezing
+        # Return the URL so the PySide6 GUI can handle download/file prompt
         return None, url
 
     # Fallback for terminal/script usage

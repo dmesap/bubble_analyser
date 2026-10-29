@@ -478,6 +478,79 @@ class ImageProcessingModel(QObject):
 
         return np.zeros((0, 0), dtype=np.int_)
 
+    def refresh_ellipses_properties(self) -> list[list[dict[str, Any]]]:
+        """Synchronize self.ellipses_properties from all loaded images in self.img_path_list.
+
+        Ensures that any manual fine-tuning or newly processed image states are
+        reflected in the master ellipses_properties list in the order of img_path_list.
+
+        Returns:
+            list[list[dict[str, Any]]]: The updated master list of ellipse properties.
+        """
+        properties: list[list[dict[str, Any]]] = []
+        for index, path in enumerate(self.img_path_list):
+            state = self.img_dict.get(path)
+            if state is not None and (state.if_fine_tuned or len(state.ellipses_properties) > 0):
+                properties.append(state.ellipses_properties)
+            elif index < len(self.ellipses_properties):
+                properties.append(self.ellipses_properties[index])
+            else:
+                properties.append([])
+        self.ellipses_properties = properties
+        self.bubble_count = sum(len(props) for props in self.ellipses_properties)
+        return self.ellipses_properties
+
+    def get_or_render_annotated_image(self, name: Path) -> npt.NDArray[np.uint8] | None:
+        """Get or dynamically render the annotated image with ellipses overlaid.
+
+        Args:
+            name (Path): The path of the image to retrieve or render.
+
+        Returns:
+            npt.NDArray[np.uint8] | None: The RGB image array with overlaid ellipses, or None if unavailable.
+        """
+        state = self.img_dict.get(name)
+        if state is None:
+            return None
+
+        # Return cached overlay if valid
+        if state.ellipses_on_images is not None and state.ellipses_on_images.size > 0:
+            return np.asarray(state.ellipses_on_images, dtype=np.uint8)
+
+        # Reload img_rgb if cleared from memory
+        if state.img_rgb is None or state.img_rgb.size == 0:
+            from bubble_analyser.processing.image_preprocess import image_preprocess
+
+            try:
+                _, state.img_rgb = image_preprocess(state.raw_img_path, state.resample or 0.5)
+            except Exception as e:
+                logging.error(f"Failed to load RGB image for {name}: {e}")
+                return None
+
+        # If ellipses exist, render them onto the RGB image
+        if state.ellipses and state.img_rgb is not None and state.img_rgb.size > 0:
+            from bubble_analyser.processing.circle_handler import EllipseHandler as CircleHandler
+
+            labels = (
+                state.labels_before_filter.copy()
+                if (state.labels_before_filter is not None and state.labels_before_filter.size > 0)
+                else None
+            )
+            handler = CircleHandler(
+                labels,
+                state.img_rgb.copy(),
+                self.px2mm_display,
+                resample=state.resample or 0.5,
+            )
+            handler.ellipses = state.ellipses
+            state.ellipses_on_images = handler.overlay_ellipses_on_image()
+            return np.asarray(state.ellipses_on_images, dtype=np.uint8)
+
+        if state.img_rgb is not None and state.img_rgb.size > 0:
+            return np.asarray(state.img_rgb, dtype=np.uint8)
+
+        return None
+
     def ellipse_manual_adjustment(self, index: int) -> npt.NDArray[np.int_]:
         """Launch the ellipse adjustment tool for manual fine-tuning of ellipses.
 
@@ -494,6 +567,12 @@ class ImageProcessingModel(QObject):
         logging.info("Ellipse handler triggered.")
         name = self.img_path_list[index]
         image = self.img_dict[name]
+
+        if image.img_rgb is None or image.img_rgb.size == 0:
+            from bubble_analyser.processing.image_preprocess import image_preprocess
+
+            _, image.img_rgb = image_preprocess(image.raw_img_path, image.resample or 0.5)
+
         self.adjuster = EllipseAdjuster(image.ellipses, image.img_rgb)
 
         loop = QEventLoop()
@@ -525,14 +604,24 @@ class ImageProcessingModel(QObject):
         image.ellipses = self.adjuster.ellipses
         image.set_fine_tuned()
 
+        if image.img_rgb is None or image.img_rgb.size == 0:
+            from bubble_analyser.processing.image_preprocess import image_preprocess
+
+            _, image.img_rgb = image_preprocess(image.raw_img_path, image.resample or 0.5)
+
         # Regenerate overlays since ellipses changed
         from bubble_analyser.processing.circle_handler import EllipseHandler as CircleHandler
 
+        labels = (
+            image.labels_before_filter.copy()
+            if (image.labels_before_filter is not None and image.labels_before_filter.size > 0)
+            else None
+        )
         handler = CircleHandler(
-            image.labels_before_filter.copy(),
+            labels,
             image.img_rgb.copy(),
             self.px2mm_display,
-            resample=image.resample,
+            resample=image.resample or 0.5,
         )
         handler.ellipses = image.ellipses
         image.ellipses_on_images = handler.overlay_ellipses_on_image()
@@ -540,6 +629,16 @@ class ImageProcessingModel(QObject):
         image.ellipses_properties = handler.calculate_circle_properties()
         for ellipse in image.ellipses_properties:
             ellipse["filename"] = image.raw_img_path.name
+
+        # Immediately update the master properties list so math/histogram/export stay in sync
+        try:
+            index = self.img_path_list.index(image.raw_img_path)
+            while len(self.ellipses_properties) <= index:
+                self.ellipses_properties.append([])
+            self.ellipses_properties[index] = image.ellipses_properties
+        except ValueError:
+            pass
+        self.refresh_ellipses_properties()
 
     def batch_process_images(
         self,
@@ -632,6 +731,7 @@ class ImageProcessingModel(QObject):
         worker_thread.on_processing_done()
 
         self.if_batched = True  # Make finalise analysis true
+        self.refresh_ellipses_properties()
 
     def save_processed_images(
         self, img: npt.NDArray[np.int_], img_name: Path, save_path: Path, if_mt: bool = False
@@ -648,13 +748,21 @@ class ImageProcessingModel(QObject):
         new_name = os.path.join(save_path, file_name)
         logging.info(f"Processed image with ellipses saving to: {new_name}")
         try:
-            if if_mt:
-                cv2.imwrite(new_name, img * 255)
+            img_to_save = img * 255 if if_mt else img
+            img_uint8 = np.asarray(img_to_save, dtype=np.uint8)
+            if img_uint8.ndim == 3 and img_uint8.shape[2] == 3:
+                bgr = cv2.cvtColor(img_uint8, cv2.COLOR_RGB2BGR)
             else:
-                cv2.imwrite(new_name, img)
+                bgr = img_uint8
+            success, enc = cv2.imencode(".png", bgr)
+            if success:
+                enc.tofile(new_name)
+                logging.info("saved")
+            else:
+                cv2.imwrite(new_name, bgr)
                 logging.info("saved")
         except Exception as e:
-            logging.info(e)
+            logging.error(f"Error saving processed image {new_name}: {e}")
 
     def save_labelled_masks(self, img: npt.NDArray[np.int_], img_name: Path, save_path: Path) -> None:
         """Save the labelled mask image to disk.

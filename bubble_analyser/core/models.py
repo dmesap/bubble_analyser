@@ -35,7 +35,8 @@ class ImageState:
     labels_after_filter: npt.NDArray[Any] = field(default_factory=lambda: np.zeros((0, 0), dtype=np.int32))
     labelled_ellipses_mask: npt.NDArray[Any] = field(default_factory=lambda: np.zeros((0, 0), dtype=np.int32))
 
-    ellipses: list[tuple[tuple[float, float], tuple[int, int], float]] = field(default_factory=list)
+    ellipses: list[tuple[tuple[float, float], tuple[float, float], float]] = field(default_factory=list)
+    ellipse_polygons: list[Any] = field(default_factory=list)
     ellipses_properties: list[dict[str, Any]] = field(default_factory=list)
     ellipses_on_images: npt.NDArray[Any] = field(default_factory=lambda: np.zeros((0, 0, 3), dtype=np.uint8))
 

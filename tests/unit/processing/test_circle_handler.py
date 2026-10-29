@@ -57,3 +57,28 @@ def test_calculate_circle_properties():
     assert props[0]["major_axis_length"] == 20.0
     assert props[0]["minor_axis_length"] == 20.0
     assert pytest.approx(props[0]["area"]) == np.pi * 10 * 10
+
+
+def test_detect_background_label_and_zero_background(params_dict):
+    # Test border detection of background = 0 (YOLO / BubMask style)
+    labels = np.zeros((50, 50), dtype=np.int32)
+    # Valid region 2
+    labels[10:20, 10:20] = 2
+    # Invalid oversized region 3
+    labels[25:45, 25:45] = 3
+
+    assert EllipseHandler.detect_background_label(labels) == 0
+
+    img = np.zeros((50, 50, 3), dtype=np.uint8)
+    strict_params = params_dict.copy()
+    strict_params["max_size"] = 12.0  # Region 3 is 20x20 = 400 area, will be filtered
+
+    handler = EllipseHandler(labels, img, px2mm_display=1.0, resample=1.0)
+    handler.load_filter_params(strict_params)
+
+    filtered = handler.filter_labels_properties()
+    assert 2 in np.unique(filtered)
+    assert 3 not in np.unique(filtered)
+    # The filtered region should have been set to background label 0, not 1
+    assert filtered[30, 30] == 0
+

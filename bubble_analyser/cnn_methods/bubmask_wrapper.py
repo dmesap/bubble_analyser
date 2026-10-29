@@ -581,12 +581,25 @@ class BubMaskDetector:
         return properties
 
     def update_config(self, **kwargs: object) -> None:
-        """Update detector configuration parameters."""
+        """Update detector configuration parameters.
+
+        The Mask R-CNN graph is built with a fixed input size, so changing the image
+        dimensions invalidates an already loaded model. In that case the model is dropped
+        and rebuilt (with the new settings) on the next detection.
+        """
+        rebuild_keys = ("image_min_dim", "image_max_dim")
+        needs_rebuild = False
         for key, value in kwargs.items():
             if hasattr(self.config, key):
+                if key in rebuild_keys and getattr(self.config, key) != value:
+                    needs_rebuild = True
                 setattr(self.config, key, value)
             else:
                 logging.warning(f"Unknown configuration parameter: {key}")
+
+        if needs_rebuild and self.model is not None:
+            logging.info("BubMask image dimensions changed; the model will be rebuilt on the next detection.")
+            self.model = None
 
 
 # Convenience functions for easy integration

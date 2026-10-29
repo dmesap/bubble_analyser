@@ -18,13 +18,13 @@ the GUI and the underlying processing logic.
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
-import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import cv2
 import numpy as np
@@ -61,8 +61,10 @@ from bubble_analyser.gui import (
     Step2Worker,
     WorkerThread,
 )
+from bubble_analyser.gui.export_dialog import ExportFormatDialog
 from bubble_analyser.gui.gui import MainWindow, ProcessingDialog
 from bubble_analyser.processing import Config, cv2_to_qpixmap
+from bubble_analyser.processing.dataset_export import FrameAnnotation, export_dataset
 
 
 class WeightsDownloadThread(QThread):
@@ -71,17 +73,22 @@ class WeightsDownloadThread(QThread):
     progress_changed = Signal(int)
     finished_download = Signal(bool, str)
 
+    def __init__(self, filename: str = "mask_rcnn_bubble.h5", url: str | None = None) -> None:
+        super().__init__()
+        self.filename = filename
+        self.url = url
+
     def run(self) -> None:
         """Execute the weight download process."""
         try:
             import requests
 
-            try:
-                import bubble_analyser.weights.loader as weights_loader
-
-                url = getattr(weights_loader, "WEIGHTS_URL")
-            except (ImportError, AttributeError):
-                url = "https://github.com/ImperialCollegeLondon/bubble_analyser/releases/download/v0.3.0/mask_rcnn_bubble.h5"
+            url = self.url
+            if not url:
+                if self.filename == "mask_rcnn_bubble.h5":
+                    url = "https://github.com/ImperialCollegeLondon/bubble_analyser/releases/download/v0.3.0/mask_rcnn_bubble.h5"
+                else:
+                    url = f"https://github.com/ImperialCollegeLondon/bubble_analyser/releases/download/v2.0.0/{self.filename}"
 
             if getattr(sys, "frozen", False):
                 base_dir = getattr(sys, "_MEIPASS", "")
@@ -90,7 +97,7 @@ class WeightsDownloadThread(QThread):
 
             weights_dir = os.path.join(base_dir, "bubble_analyser", "weights")
             os.makedirs(weights_dir, exist_ok=True)
-            weights_path = os.path.join(weights_dir, "mask_rcnn_bubble.h5")
+            weights_path = os.path.join(weights_dir, self.filename)
 
             response = requests.get(url, stream=True, timeout=30)
             response.raise_for_status()
@@ -405,17 +412,18 @@ class FolderTabHandler:
         Loads the selected image from the list and displays it in the preview area,
         maintaining the aspect ratio.
         """
-        selected_image = self.gui.image_list.currentItem().text()
+        current_item = self.gui.image_list.currentItem()
+        if current_item is None:
+            return
+        selected_image = current_item.text()
         folder_path = self.gui.folder_path_edit.text()
-        image_path = folder_path + "/" + selected_image
+        if not folder_path or not selected_image:
+            return
+        image_path = os.path.join(folder_path, selected_image)
+        if not os.path.exists(image_path):
+            return
         pixmap = QPixmap(image_path)
-
-        self.gui.image_preview.setPixmap(
-            pixmap.scaled(
-                self.gui.image_preview.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-            )
-        )
+        self.gui.image_preview.set_preview_pixmap(pixmap)
 
     def _show_warning(self, title: str, message: str) -> None:
         """Display a warning message box to the user.
@@ -500,12 +508,7 @@ class CalibrationTabHandler:
         if image_path:
             self.gui.pixel_img_name.setText(image_path)
             pixmap = QPixmap(image_path)
-            self.gui.pixel_img_preview.setPixmap(
-                pixmap.scaled(
-                    self.gui.pixel_img_preview.size(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                )
-            )
+            self.gui.pixel_img_preview.set_preview_pixmap(pixmap)
             return True
         else:
             logging.info("User cancelled ruler image selection")
@@ -525,17 +528,16 @@ class CalibrationTabHandler:
         if os.path.exists(img_path):
             px2mm, img_drawed_line = self.calibration_model.get_px2mm_ratio(pixel_img_path=img_path, gui=self.gui)
 
+            if px2mm <= 0:
+                self.gui.statusBar().showMessage("Calibration cancelled: no line was drawn.", 5000)
+                return
+
             px2mm_display = px2mm
 
             self.gui.manual_px_mm_input.setText(f"{px2mm_display:.3f}")
 
             pixmap = cv2_to_qpixmap(img_drawed_line)
-            self.gui.pixel_img_preview.setPixmap(
-                pixmap.scaled(
-                    self.gui.pixel_img_preview.size(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                )
-            )
+            self.gui.pixel_img_preview.set_preview_pixmap(pixmap)
             logging.info(f"Pixel to millimeter ratio detected as: {px2mm:.3f}")
         else:
             self.gui.statusBar().showMessage("Image file does not exist or not selected.", 5000)
@@ -566,12 +568,7 @@ class CalibrationTabHandler:
             self.calibration_model.bknd_img_path = Path(image_path)
             self.gui.bg_corr_image_name.setText(image_path)
             pixmap = QPixmap(image_path)
-            self.gui.bg_corr_image_preview.setPixmap(
-                pixmap.scaled(
-                    self.gui.bg_corr_image_preview.size(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                )
-            )
+            self.gui.bg_corr_image_preview.set_preview_pixmap(pixmap)
             self.calibration_model.if_bknd = True
             logging.info(f"Background image path set as: {image_path}")
         else:
@@ -590,17 +587,34 @@ class CalibrationTabHandler:
             self._show_warning("Selection Locked", "You have already confirmed the calibration.")
             return
 
-        self.calibration_model.bknd_img_path = Path(self.gui.bg_corr_image_name.text())
-        self.calibration_model.px2mm_display = float(self.gui.manual_px_mm_input.text())
-        # self.calibration_model.px2mm = self.calibration_model.px2mm_display * self.img_resample
-        self.calibration_model.px2mm = self.calibration_model.px2mm_display
+        px_text = self.gui.manual_px_mm_input.text().strip()
+        try:
+            val = float(px_text)
+            if val <= 0:
+                raise ValueError("Value must be positive")
+        except ValueError:
+            self._show_warning(
+                "Invalid Calibration Ratio",
+                "Please enter a valid positive number for the pixel-to-millimeter ratio (px/mm).",
+            )
+            return
+
+        bg_text = self.gui.bg_corr_image_name.text().strip()
+        if bg_text and bg_text != "No background image selected" and os.path.isfile(bg_text):
+            self.calibration_model.bknd_img_path = Path(bg_text)
+            self.calibration_model.if_bknd = True
+        else:
+            self.calibration_model.bknd_img_path = cast(Path, None)
+            self.calibration_model.if_bknd = False
+
+        self.calibration_model.px2mm_display = val
+        self.calibration_model.px2mm = val
 
         self.calibration_model.confirm_calibration()
 
         self.gui.tabs.setCurrentIndex(self.gui.tabs.indexOf(self.gui.image_processing_tab))
         self.preview_image_intialize()
         logging.info(f"Pixel to millimeter ratio locked as: {self.calibration_model.px2mm_display:.3f}")
-        # logging.info(f"Real pixel to millimeter ratio locked as: {self.calibration_model.px2mm_display:.3f}")
         logging.info(f"Background image path locked as: {self.calibration_model.bknd_img_path}")
         logging.info("Calibration confirmed and locked.")
         logging.info("******************************Parameter Adjustment Session******************************")
@@ -611,18 +625,18 @@ class CalibrationTabHandler:
         Loads the selected image from the list and displays it in the preview area,
         maintaining the aspect ratio.
         """
+        if self.gui.image_list.count() == 0:
+            return
         self.gui.image_list.setCurrentRow(0)
-        selected_image = self.gui.image_list.currentItem().text()
+        current_item = self.gui.image_list.currentItem()
+        if current_item is None:
+            return
+        selected_image = current_item.text()
         folder_path = self.gui.folder_path_edit.text()
         image_path = folder_path + "/" + selected_image
         pixmap = QPixmap(image_path)
 
-        self.gui.sample_image_preview.setPixmap(
-            pixmap.scaled(
-                self.gui.sample_image_preview.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-            )
-        )
+        self.gui.sample_image_preview.set_preview_pixmap(pixmap)
 
         # Update the image info display for the initial image
         if hasattr(self.gui, "sample_image_info_label"):
@@ -713,12 +727,7 @@ class ImageProcessingTabHandler(QThread):
         image_path = folder_path + "/" + selected_image
         pixmap = QPixmap(image_path)
 
-        self.gui.sample_image_preview.setPixmap(
-            pixmap.scaled(
-                self.gui.sample_image_preview.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-            )
-        )
+        self.gui.sample_image_preview.set_preview_pixmap(pixmap)
 
         # Update the filename and index display
         self.update_image_info_display()
@@ -986,6 +995,20 @@ class ImageProcessingTabHandler(QThread):
 
         # Retrieve descriptions dynamically from the algorithm instance
         instance = self.model.methods_handler.all_classes.get(self.current_algorithm)
+
+        if self.current_algorithm == "BubMask (Deep Learning)":
+            self._ensure_bubmask_params_only()
+        else:
+            # Fallback: imported projects often store no parameters for the
+            # non-BubMask methods (YOLO Segmentation, Iterative Watershed,
+            # Peak-Based, ...), which left their parameter table empty. Seed it
+            # from the method's own defaults so its attributes are always visible
+            # and editable.
+            stored = self.model.all_methods_n_params.get(self.current_algorithm)
+            if not stored and instance is not None and hasattr(instance, "get_needed_params"):
+                self.model.all_methods_n_params[self.current_algorithm] = dict(instance.get_needed_params())
+
+        # Retrieve descriptions dynamically from the algorithm instance
         algo_descriptions = {}
         if instance and hasattr(instance, "get_param_descriptions"):
             algo_descriptions = instance.get_param_descriptions()
@@ -1075,6 +1098,22 @@ class ImageProcessingTabHandler(QThread):
                         # Set the combo box as the cell widget
                         self.gui.param_sandbox1.setCellWidget(row, 1, combo_box)
 
+                    elif name == "device" and self.current_algorithm == "YOLO Segmentation":
+                        combo_box = QComboBox()
+                        combo_box.addItems(["CPU", "GPU"])
+                        combo_box.setToolTip(
+                            "CPU: runs on the processor and is always compatible.\n"
+                            "GPU: uses NVIDIA CUDA through PyTorch when available."
+                        )
+
+                        current_value = str(value).strip().lower()
+                        if current_value in ["gpu", "cuda", "0"]:
+                            combo_box.setCurrentText("GPU")
+                        else:
+                            combo_box.setCurrentText("CPU")
+
+                        self.gui.param_sandbox1.setCellWidget(row, 1, combo_box)
+
                     else:
                         # Regular text item for other parameters
                         value_item = QTableWidgetItem(str(value))
@@ -1082,6 +1121,110 @@ class ImageProcessingTabHandler(QThread):
                             value_item.setToolTip(description)
                         self.gui.param_sandbox1.setItem(row, 1, value_item)
 
+                break
+
+    def _ensure_bubmask_params_only(self) -> None:
+        """Keep only the parameters that BubMask actually uses.
+
+        Some imported projects can carry watershed parameters in the BubMask
+        parameter dictionary. Those extra values confuse the GUI and can be
+        saved back into the project. This guard makes the BubMask table explicit
+        and stable.
+        """
+        algorithm = "BubMask (Deep Learning)"
+        current = self.model.all_methods_n_params.get(algorithm, {})
+        instance = self.model.methods_handler.all_classes.get(algorithm)
+        default_params = instance.get_needed_params() if instance and hasattr(instance, "get_needed_params") else {}
+
+        wanted_order = [
+            "weights_path",
+            "confidence_threshold",
+            "resample",
+            "image_min_dim",
+            "image_max_dim",
+            "max_bubbles",
+            "nms_threshold",
+        ]
+        cleaned = {}
+        for name in wanted_order:
+            if name in current:
+                cleaned[name] = current[name]
+            elif name in default_params:
+                cleaned[name] = default_params[name]
+
+        # Fallbacks mirror the BubMaskWatershed defaults so the two never drift apart.
+        cleaned["confidence_threshold"] = float(cleaned.get("confidence_threshold", 0.9))
+        cleaned["resample"] = float(cleaned.get("resample", 1.0))
+        cleaned["image_min_dim"] = int(float(cleaned.get("image_min_dim", 512)))
+        cleaned["image_max_dim"] = int(float(cleaned.get("image_max_dim", 1024)))
+        cleaned["max_bubbles"] = int(float(cleaned.get("max_bubbles", 500)))
+        cleaned["nms_threshold"] = float(cleaned.get("nms_threshold", 0.3))
+
+        self.model.all_methods_n_params[algorithm] = cleaned
+        self.model.methods_handler.full_dict[algorithm] = cleaned
+
+    def _revert_algorithm_selection(self) -> None:
+        """Revert algorithm combobox to the previously selected algorithm."""
+        self.gui.algorithm_combo.blockSignals(True)
+        self.gui.algorithm_combo.setCurrentText(getattr(self, "previous_algorithm", self.algorithm_list[0]))
+        self.gui.algorithm_combo.blockSignals(False)
+
+    def download_weights_dialog(self, filename: str, url: str | None = None) -> bool:
+        """Download weights file using a modal progress dialog."""
+        progress = QProgressDialog(
+            f"Downloading {filename}...\nThis may take a few minutes.",
+            "Cancel",
+            0,
+            100,
+            self.gui,
+        )
+        progress.setWindowTitle(f"Downloading {filename}")
+        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setValue(0)
+        progress.show()
+
+        loop = QEventLoop()
+        self._download_worker = WeightsDownloadThread(filename=filename, url=url)
+        download_success = [False]
+        download_completed = [False]
+
+        def on_finished(success: bool, msg: str) -> None:
+            download_completed[0] = True
+            download_success[0] = success
+            if not success:
+                self._show_warning("Download Failed", f"Failed to download {filename}: {msg}")
+            loop.quit()
+
+        def on_cancel() -> None:
+            if download_completed[0]:
+                return
+            self._download_worker.terminate()
+            self._download_worker.wait()
+            download_success[0] = False
+            loop.quit()
+
+        self._download_worker.progress_changed.connect(progress.setValue)
+        self._download_worker.finished_download.connect(on_finished)
+        progress.canceled.connect(on_cancel)
+        self._download_worker.start()
+        loop.exec()
+        progress.close()
+
+        return download_success[0]
+
+    def update_param_table_cell(self, param_name: str, new_value: str) -> None:
+        """Update a text value in the first parameter table by parameter name."""
+        for row in range(self.gui.param_sandbox1.rowCount()):
+            item = self.gui.param_sandbox1.item(row, 0)
+            if item and item.text() == param_name:
+                val_item = self.gui.param_sandbox1.item(row, 1)
+                if val_item:
+                    val_item.setText(new_value)
+                else:
+                    self.gui.param_sandbox1.setItem(row, 1, QTableWidgetItem(new_value))
                 break
 
     def handle_algorithm_change(self, new_algorithm: str) -> None:
@@ -1103,7 +1246,7 @@ class ImageProcessingTabHandler(QThread):
         if is_ml_method:
             from bubble_analyser.weights.loader import get_weights_path
 
-            weights_path, _ = get_weights_path(download_if_missing=False)
+            weights_path, download_url = get_weights_path("mask_rcnn_bubble.h5", download_if_missing=False)
 
             if weights_path is None:
                 reply = QMessageBox.question(
@@ -1119,63 +1262,64 @@ class ImageProcessingTabHandler(QThread):
                 )
 
                 if reply == QMessageBox.StandardButton.Yes:
-                    progress = QProgressDialog(
-                        "Downloading weights file...\nThis may take a few minutes.",
-                        "Cancel",
-                        0,
-                        100,
-                        self.gui,
-                    )
-                    progress.setWindowTitle("Downloading...")
-                    progress.setWindowModality(Qt.WindowModality.ApplicationModal)
-                    progress.setMinimumDuration(0)
-                    progress.setAutoClose(False)
-                    progress.setAutoReset(False)
-                    progress.setValue(0)
-                    progress.show()
-
-                    loop = QEventLoop()
-                    self._download_worker = WeightsDownloadThread()
-                    download_success = [False]
-                    download_completed = [False]
-
-                    def on_finished(success: bool, msg: str) -> None:
-                        download_completed[0] = True
-                        download_success[0] = success
-                        if not success:
-                            self._show_warning("Download Failed", f"Failed to download weights: {msg}")
-                        loop.quit()
-
-                    def on_cancel() -> None:
-                        if download_completed[0]:
-                            return
-                        self._download_worker.terminate()
-                        self._download_worker.wait()
-                        download_success[0] = False
-                        loop.quit()
-
-                    self._download_worker.progress_changed.connect(progress.setValue)
-                    self._download_worker.finished_download.connect(on_finished)
-                    progress.canceled.connect(on_cancel)
-                    self._download_worker.start()
-                    loop.exec()
-                    progress.close()
-
-                    if not download_success[0]:
-                        self.gui.algorithm_combo.blockSignals(True)
-                        self.gui.algorithm_combo.setCurrentText(
-                            getattr(self, "previous_algorithm", self.algorithm_list[0])
-                        )
-                        self.gui.algorithm_combo.blockSignals(False)
+                    if not self.download_weights_dialog("mask_rcnn_bubble.h5", download_url):
+                        self._revert_algorithm_selection()
                         return
-
                     auto_run_after = True
                 else:
-                    # User declined to download, revert to previous selection
-                    self.gui.algorithm_combo.blockSignals(True)
-                    self.gui.algorithm_combo.setCurrentText(getattr(self, "previous_algorithm", self.algorithm_list[0]))
-                    self.gui.algorithm_combo.blockSignals(False)
+                    self._revert_algorithm_selection()
                     return
+
+        elif new_algorithm == "YOLO Segmentation":
+            from bubble_analyser.weights.loader import get_weights_path
+
+            yolo_params = self.model.all_methods_n_params.get("YOLO Segmentation", {})
+            current_path_str = str(yolo_params.get("weights_path", "")).strip()
+            current_path = Path(current_path_str).expanduser() if current_path_str else None
+
+            # If current configured path does not exist, check default location
+            if current_path is None or not current_path.is_file():
+                w_path, download_url = get_weights_path("yolo_bubble_seg.pt", download_if_missing=False)
+                if w_path and Path(w_path).is_file():
+                    yolo_params["weights_path"] = w_path
+                else:
+                    box = QMessageBox(self.gui)
+                    box.setWindowTitle("YOLO Weights Required")
+                    box.setIcon(QMessageBox.Icon.Information)
+                    box.setText(
+                        "The 'YOLO Segmentation' method requires a trained weights file (yolo_bubble_seg.pt).\n\n"
+                        "You can locate an existing .pt file on your computer, or download it from GitHub Releases."
+                    )
+                    locate_btn = box.addButton("Locate (.pt)...", QMessageBox.ButtonRole.ActionRole)
+                    download_btn = box.addButton("Download", QMessageBox.ButtonRole.AcceptRole)
+                    box.addButton(QMessageBox.StandardButton.Cancel)
+                    box.setDefaultButton(locate_btn)
+                    box.exec()
+
+                    clicked = box.clickedButton()
+                    if clicked == locate_btn:
+                        chosen, _ = QFileDialog.getOpenFileName(
+                            self.gui,
+                            "Select YOLO Segmentation Weights (.pt)",
+                            "",
+                            "YOLO Weights (*.pt);;All Files (*)",
+                        )
+                        if chosen and Path(chosen).is_file():
+                            yolo_params["weights_path"] = chosen
+                        else:
+                            self._revert_algorithm_selection()
+                            return
+                    elif clicked == download_btn:
+                        if self.download_weights_dialog("yolo_bubble_seg.pt", download_url):
+                            w_path, _ = get_weights_path("yolo_bubble_seg.pt", download_if_missing=False)
+                            if w_path:
+                                yolo_params["weights_path"] = w_path
+                        else:
+                            self._revert_algorithm_selection()
+                            return
+                    else:
+                        self._revert_algorithm_selection()
+                        return
 
         self.previous_algorithm = new_algorithm
 
@@ -1219,6 +1363,8 @@ class ImageProcessingTabHandler(QThread):
         logging.info("-------------------------------Running Step 1: Segmentation------------------------------")
         logging.info("-----------------------------------------------------------------------------------------")
         self.update_segment_parameters()
+        if not self.validate_selected_segmentation_method():
+            return
 
         # Validate the parameters
         logging.info("------------------------------Validating Segment Parameters------------------------------")
@@ -1234,6 +1380,10 @@ class ImageProcessingTabHandler(QThread):
                         return
 
         # self.pass_segment_params(self.model.segment_param_dict)
+        if not self.model.img_path_list:
+            logging.info("Parameters updated; skipping Step 1 processing because no images are loaded.")
+            return
+
         self._process_step_1()
 
     def convert_value(self, text: str) -> int | float | str:
@@ -1277,6 +1427,11 @@ class ImageProcessingTabHandler(QThread):
             value_item = table_widget.item(row, 1)
             if name_item and value_item:
                 params[name_item.text()] = self.convert_value(value_item.text())
+            elif name_item:
+                # Parameters edited through a dropdown (e.g. YOLO "device") live in a cell widget, not an item.
+                cell_widget = table_widget.cellWidget(row, 1)
+                if isinstance(cell_widget, QComboBox):
+                    params[name_item.text()] = self.convert_value(cell_widget.currentText())
         return params  # type: ignore
 
     def update_segment_parameters(self) -> bool:
@@ -1295,11 +1450,128 @@ class ImageProcessingTabHandler(QThread):
         # Update the model's dictionary for the selected algorithm
         for algorithm_name, params_in_dict in self.model.all_methods_n_params.items():
             if algorithm_name == self.model.algorithm:
+                if algorithm_name == "BubMask (Deep Learning)":
+                    allowed = {
+                        "weights_path",
+                        "confidence_threshold",
+                        "resample",
+                        "image_min_dim",
+                        "image_max_dim",
+                        "max_bubbles",
+                        "nms_threshold",
+                    }
+                    params = {name: value for name, value in params.items() if name in allowed}
+                    params_in_dict.clear()
                 for name, value in params.items():
                     logging.debug(f"Updating {name} to {value}")
                     params_in_dict[name] = value
 
+        if self.model.algorithm == "BubMask (Deep Learning)":
+            self._ensure_bubmask_params_only()
+
         return True
+
+    def validate_selected_segmentation_method(self) -> bool:
+        """Validate requirements that are specific to the selected segmentation method."""
+        if self.model.algorithm != "YOLO Segmentation":
+            return True
+
+        params = self.model.all_methods_n_params.get(self.model.algorithm, {})
+        weights_path = Path(str(params.get("weights_path", ""))).expanduser()
+        selected_device = str(params.get("device", "CPU")).strip().lower()
+        missing_items: list[str] = []
+
+        if not weights_path.is_file():
+            box = QMessageBox(self.gui)
+            box.setWindowTitle("YOLO Weights Not Found")
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setText(
+                "YOLO weights were not found at the configured path:\n"
+                f"{weights_path}\n\n"
+                "Would you like to locate your .pt model file, or attempt to download it?"
+            )
+            locate_btn = box.addButton("Locate (.pt)...", QMessageBox.ButtonRole.ActionRole)
+            download_btn = box.addButton("Download", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton(QMessageBox.StandardButton.Cancel)
+            box.setDefaultButton(locate_btn)
+            box.exec()
+
+            if box.clickedButton() == locate_btn:
+                chosen, _ = QFileDialog.getOpenFileName(
+                    self.gui,
+                    "Select YOLO Segmentation Weights (.pt)",
+                    "",
+                    "YOLO Weights (*.pt);;All Files (*)",
+                )
+                if chosen and Path(chosen).is_file():
+                    params["weights_path"] = chosen
+                    self.update_param_table_cell("weights_path", chosen)
+                    weights_path = Path(chosen)
+            elif box.clickedButton() == download_btn:
+                from bubble_analyser.weights.loader import get_weights_path
+
+                _, download_url = get_weights_path("yolo_bubble_seg.pt", download_if_missing=False)
+                if self.download_weights_dialog("yolo_bubble_seg.pt", download_url):
+                    w_path, _ = get_weights_path("yolo_bubble_seg.pt", download_if_missing=False)
+                    if w_path:
+                        params["weights_path"] = w_path
+                        self.update_param_table_cell("weights_path", w_path)
+                        weights_path = Path(w_path)
+
+        if not weights_path.is_file():
+            missing_items.append(
+                "YOLO weights were not found. Set 'weights_path' to a valid YOLO segmentation .pt file.\n"
+                f"Current path:\n{weights_path}"
+            )
+        elif weights_path.suffix.lower() != ".pt":
+            missing_items.append(
+                f"The selected YOLO weights file should be a .pt segmentation model.\nCurrent file:\n{weights_path}"
+            )
+
+        if importlib.util.find_spec("ultralytics") is None:
+            missing_items.append(
+                "The Python package 'ultralytics' is not installed in the Bubble Analyzer environment."
+            )
+
+        if selected_device in ["gpu", "cuda", "0"]:
+            from bubble_analyser.methods.yolo_method import describe_cuda_problem
+
+            cuda_problem = describe_cuda_problem()
+            if cuda_problem is not None:
+                params["device"] = "CPU"  # type: ignore[assignment]  # YOLO params also hold strings
+                self.set_yolo_device_combo_text("CPU")
+                logging.warning(f"GPU unavailable for YOLO: {cuda_problem}")
+                QMessageBox.warning(
+                    self.gui,
+                    "GPU Not Available",
+                    f"GPU was selected, but it cannot be used:\n\n{cuda_problem}\n\n"
+                    "Bubble Analyzer will continue with CPU for this run.\n\n"
+                    "CPU is slower, but it is the safest compatible option.",
+                )
+
+        if not missing_items:
+            return True
+
+        QMessageBox.warning(
+            self.gui,
+            "YOLO Segmentation Not Ready",
+            "YOLO Segmentation needs a trained YOLO segmentation model before it can run.\n\n"
+            + "\n\n".join(missing_items)
+            + "\n\nUse BubMask for now, or install Ultralytics and set weights_path to your trained YOLO .pt model.",
+        )
+        return False
+
+    def set_yolo_device_combo_text(self, text: str) -> None:
+        """Update the YOLO device combo box in the parameter table, when visible."""
+        row_count = self.gui.param_sandbox1.rowCount()
+        for row in range(row_count):
+            name_item = self.gui.param_sandbox1.item(row, 0)
+            if name_item is None or name_item.text() != "device":
+                continue
+            cell_widget = self.gui.param_sandbox1.cellWidget(row, 1)
+            if isinstance(cell_widget, QComboBox):
+                cell_widget.setCurrentText(text)
+            return
 
     def _process_step_1(self) -> None:
         """Execute the first step of image processing.
@@ -1426,6 +1698,10 @@ class ImageProcessingTabHandler(QThread):
                 return
 
         self.pass_filter_params()
+        if not self.model.img_path_list:
+            logging.info("Parameters updated; skipping Step 2 processing because no images are loaded.")
+            return
+
         self._process_step_2()
 
     def store_filter_params(self) -> None:
@@ -1567,17 +1843,73 @@ class ImageProcessingTabHandler(QThread):
             "The analysis will be finalised. \n "
             "Make sure you are satisfied with the segmentation of all images. Confirm to finalise.",
         )
+        self.create_save_images_checkbox(confirm_dialog)
 
         response = confirm_dialog.exec()
 
         if response == QMessageBox.StandardButton.Ok:
             self.model.if_finalise_analysis = True
+            self.model.refresh_ellipses_properties()
+
+            if self.if_save_processed_images:
+                save_dir = None
+                if hasattr(self, "export_handler") and self.export_handler and self.export_handler.if_save_path:
+                    save_dir = str(self.export_handler.save_path)
+                if not save_dir or not os.path.exists(save_dir):
+                    save_dir = QFileDialog.getExistingDirectory(
+                        self.gui, "Select Folder to Save Annotated Images"
+                    )
+                if save_dir:
+                    self.save_annotated_images_to_directory(save_dir)
+
             # Transition directly to results
             self.gui.tabs.setCurrentIndex(self.gui.tabs.indexOf(self.gui.results_tab))
             self.batch_processing_done.emit()  # Trigger histogram generation
             logging.info("Analysis finalised. Switched to results tab.")
         else:
             logging.info("Analysis finalisation canceled.")
+
+    def save_annotated_images_to_directory(self, folder_path: str) -> tuple[int, int]:
+        """Save annotated images with ellipses overlaid to the specified directory.
+
+        Args:
+            folder_path: Directory path where images should be saved.
+
+        Returns:
+            tuple[int, int]: (success_count, error_count)
+        """
+        success_count = 0
+        error_count = 0
+        Path(folder_path).mkdir(parents=True, exist_ok=True)
+
+        for name in self.model.img_path_list:
+            annotated_img = self.model.get_or_render_annotated_image(name)
+            if annotated_img is not None and annotated_img.size > 0:
+                base_name = os.path.splitext(os.path.basename(name))[0]
+                export_path = os.path.join(folder_path, f"{base_name}_annotated.png")
+                try:
+                    img_uint8 = np.asarray(annotated_img, dtype=np.uint8)
+                    if img_uint8.ndim == 3 and img_uint8.shape[2] == 3:
+                        bgr = cv2.cvtColor(img_uint8, cv2.COLOR_RGB2BGR)
+                    else:
+                        bgr = img_uint8
+                    success, enc = cv2.imencode(".png", bgr)
+                    if success:
+                        enc.tofile(export_path)
+                        success_count += 1
+                    else:
+                        if cv2.imwrite(export_path, bgr):
+                            success_count += 1
+                        else:
+                            error_count += 1
+                except Exception as e:
+                    logging.error(f"Failed to save annotated image {name}: {e}")
+                    error_count += 1
+            else:
+                error_count += 1
+
+        logging.info(f"Saved {success_count} annotated images to {folder_path} (Errors: {error_count})")
+        return success_count, error_count
 
     def create_confirm_dialog(self, title: str, text: str) -> QMessageBox:
         """Create a confirmation dialog for batch processing.
@@ -1600,7 +1932,8 @@ class ImageProcessingTabHandler(QThread):
         Returns:
             QCheckBox: The configured checkbox widget.
         """
-        save_images_checkbox = QCheckBox("Save processed images")
+        save_images_checkbox = QCheckBox("Save processed images with ellipses")
+        save_images_checkbox.setChecked(self.if_save_processed_images)
         save_images_checkbox.stateChanged.connect(
             lambda: self.update_if_save_processed_images(save_images_checkbox.isChecked())
         )
@@ -1640,6 +1973,8 @@ class ImageProcessingTabHandler(QThread):
         logging.info("------------------------------Validating Filter Parameters------------------------------")
         self.store_filter_params()
         self.update_segment_parameters()
+        if not self.validate_selected_segmentation_method():
+            return
         self.pass_filter_params()
         self.show_progress_window(len(self.model.img_path_list))
 
@@ -2073,6 +2408,9 @@ class ResultsTabHandler(QThread):
         Returns:
             npt.NDArray[np.float64]: Array of equivalent diameters from all processed images.
         """
+        if hasattr(self, "model") and self.model is not None:
+            self.ellipses_properties = self.model.refresh_ellipses_properties()
+
         equivalent_diameters = []
         for image in self.ellipses_properties:
             for ellipse in image:
@@ -2130,18 +2468,33 @@ class ResultsTabHandler(QThread):
 
         success_count = 0
         error_count = 0
+        Path(folder_path).mkdir(parents=True, exist_ok=True)
 
         for name in self.model.img_path_list:
-            state = self.model.img_dict.get(name)
-            if state and state.ellipses_on_images is not None and state.ellipses_on_images.size > 0:
+            annotated_img = self.model.get_or_render_annotated_image(name)
+            if annotated_img is not None and annotated_img.size > 0:
                 base_name = os.path.splitext(os.path.basename(name))[0]
                 export_path = os.path.join(folder_path, f"{base_name}_annotated.png")
                 try:
-                    cv2.imwrite(export_path, cv2.cvtColor(state.ellipses_on_images, cv2.COLOR_RGB2BGR))
-                    success_count += 1
+                    img_uint8 = np.asarray(annotated_img, dtype=np.uint8)
+                    if img_uint8.ndim == 3 and img_uint8.shape[2] == 3:
+                        bgr = cv2.cvtColor(img_uint8, cv2.COLOR_RGB2BGR)
+                    else:
+                        bgr = img_uint8
+                    success, enc = cv2.imencode(".png", bgr)
+                    if success:
+                        enc.tofile(export_path)
+                        success_count += 1
+                    else:
+                        if cv2.imwrite(export_path, bgr):
+                            success_count += 1
+                        else:
+                            error_count += 1
                 except Exception as e:
                     logging.error(f"Failed to export {name}: {e}")
                     error_count += 1
+            else:
+                error_count += 1
 
         QMessageBox.information(
             self.gui,
@@ -2151,45 +2504,59 @@ class ResultsTabHandler(QThread):
         )
 
     def export_ml_data(self) -> None:
-        """Export ML training data (raw images + numpy masks) in an organized structure."""
-        root_path = QFileDialog.getExistingDirectory(self.gui, "Select Folder to Export ML Training Data")
+        """Export the corrected segmentations as a dataset, in the format the user picks."""
+        dialog = ExportFormatDialog(self.gui)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        dataset_format = dialog.selected_format()
+
+        root_path = QFileDialog.getExistingDirectory(self.gui, f"Select Folder for the {dataset_format.label} Export")
         if not root_path:
             return
 
-        # Create subdirectories
-        images_dir = Path(root_path) / "images"
-        masks_dir = Path(root_path) / "masks"
-        images_dir.mkdir(exist_ok=True)
-        masks_dir.mkdir(exist_ok=True)
-
-        success_count = 0
-        error_count = 0
-
-        for name in self.model.img_path_list:
+        processed_paths = [
+            name
+            for name in self.model.img_path_list
+            if (state := self.model.img_dict.get(name)) is not None
+            and (len(state.ellipses) > 0 or state.labelled_ellipses_mask.size > 0)
+        ]
+        frames: list[FrameAnnotation] = []
+        for name in processed_paths:
             state = self.model.img_dict.get(name)
-            if state and state.labelled_ellipses_mask is not None:
-                base_name = os.path.splitext(os.path.basename(name))[0]
-                img_ext = os.path.splitext(name)[1]
+            if state is None:
+                continue
+            height, width = state.img_rgb.shape[:2]
+            frames.append(
+                FrameAnnotation(
+                    image_path=Path(name),
+                    ellipses=state.ellipses,
+                    polygons=getattr(state, "ellipse_polygons", ()),
+                    annotation_shape=(height, width),
+                    labelled_mask=state.labelled_ellipses_mask,
+                )
+            )
 
-                img_dest = images_dir / f"{base_name}{img_ext}"
-                mask_dest = masks_dir / f"{base_name}_mask.npy"
+        try:
+            summary = export_dataset(Path(root_path), frames, dataset_format.key)
+        except ValueError as error:
+            QMessageBox.warning(self.gui, "Nothing to Export", str(error))
+            return
+        except Exception as error:
+            logging.exception("Dataset export failed")
+            QMessageBox.critical(self.gui, "Export Failed", str(error))
+            return
 
-                try:
-                    # Copy original image
-                    shutil.copy2(name, img_dest)
-                    # Save mask as numpy array
-                    np.save(mask_dest, state.labelled_ellipses_mask)
-                    success_count += 1
-                except Exception as e:
-                    logging.error(f"Failed to export ML data for {name}: {e}")
-                    error_count += 1
-
-        QMessageBox.information(
-            self.gui,
-            "ML Export Complete",
-            f"Successfully exported {success_count} data pairs to {root_path}."
-            + (f"\nFailed: {error_count}" if error_count > 0 else ""),
-        )
+        unprocessed = len(self.model.img_path_list) - len(processed_paths)
+        lines = [
+            f"Exported {summary.frames_exported} images and {summary.instances_exported} bubbles "
+            f"as {dataset_format.label} to {root_path}.",
+            f"Skipped {unprocessed} unprocessed images.",
+        ]
+        if summary.frames_without_bubbles:
+            lines.append(f"Skipped {summary.frames_without_bubbles} processed images without bubbles.")
+        if summary.failed:
+            lines.append(f"Failed: {len(summary.failed)} ({summary.failed[0][0]}: {summary.failed[0][1]})")
+        QMessageBox.information(self.gui, "Export Complete", "\n".join(lines))
 
     def save_graph(self, export_path: str) -> None:
         """Saves the current histogram to the selected folder."""
@@ -2197,6 +2564,9 @@ class ResultsTabHandler(QThread):
 
     def save_combined_data(self, export_path: str) -> None:
         """Save both ellipse data and config data to a single Excel file with multiple sheets."""
+        if hasattr(self, "model") and self.model is not None:
+            self.ellipses_properties = self.model.refresh_ellipses_properties()
+
         # Prepare ellipse data
         ellipse_headers = [
             "major_axis_length(px)",
@@ -2223,7 +2593,7 @@ class ResultsTabHandler(QThread):
                         circle["area"],
                         circle["perimeter"],
                         circle["eccentricity"],
-                        circle["filename"],
+                        circle.get("filename", ""),
                     ]
                 )
 
@@ -2481,59 +2851,67 @@ class MainHandler:
         Removes signal-slot connections between GUI components and their respective
         handlers to prevent further event handling and interaction.
         """
+        def _safe_disconnect(signal: Any, slot: Any = None) -> None:
+            try:
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    if slot is not None:
+                        signal.disconnect(slot)
+                    else:
+                        signal.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+
         # menubar
-        self.gui.export_setting_action.triggered.disconnect(self.menubar_open_export_settings_dialog)
-        self.gui.restart_action.triggered.disconnect(self.menubar_ask_if_restart)
-        self.gui.restart_button.clicked.disconnect(self.menubar_ask_if_restart)
+        _safe_disconnect(self.gui.export_setting_action.triggered, self.menubar_open_export_settings_dialog)
+        _safe_disconnect(self.gui.restart_action.triggered, self.menubar_ask_if_restart)
+        _safe_disconnect(self.gui.restart_button.clicked, self.menubar_ask_if_restart)
 
         # folder tab
-        self.gui.folder_path_edit.setText(str(self.folder_tab_handler.image_path))
-        self.gui.select_folder_button.clicked.disconnect(self.tab1_select_folder)
-        self.gui.confirm_folder_button.clicked.disconnect(self.tab1_confirm_folder_selection)
-        self.gui.image_list.clicked.disconnect(self.folder_tab_handler.preview_image_folder_tab)
+        _safe_disconnect(self.gui.select_folder_button.clicked, self.tab1_select_folder)
+        _safe_disconnect(self.gui.confirm_folder_button.clicked, self.tab1_confirm_folder_selection)
+        _safe_disconnect(self.gui.image_list.clicked, self.folder_tab_handler.preview_image_folder_tab)
 
         # calibration tab
-        self.gui.pixel_img_name.setText(str(self.calibration_tab_handler.px_img_path))
-        self.gui.pixel_img_select_button.clicked.disconnect(self.tab2_select_ruler_button)
-        self.gui.bg_corr_select_button.clicked.disconnect(self.tab2_select_bg_corr_image)
-        self.gui.confirm_px_mm_button.clicked.disconnect(
-            self.tab2_confirm_calibration
-        )  # Connect confirm button to the handler
+        _safe_disconnect(self.gui.pixel_img_select_button.clicked, self.tab2_select_ruler_button)
+        _safe_disconnect(self.gui.bg_corr_select_button.clicked, self.tab2_select_bg_corr_image)
+        _safe_disconnect(self.gui.confirm_px_mm_button.clicked, self.tab2_confirm_calibration)
 
         # image processing tab
         # column 1
-        self.gui.prev_button.clicked.disconnect()
-        self.gui.next_button.clicked.disconnect()
-        self.gui.preview_processed_images_button.clicked.disconnect(self.tab3_preview_processed_images)
+        _safe_disconnect(self.gui.prev_button.clicked)
+        _safe_disconnect(self.gui.next_button.clicked)
+        _safe_disconnect(self.gui.preview_processed_images_button.clicked, self.tab3_preview_processed_images)
         # column 2
-        self.image_processing_tab_handler.initialize_algorithm_combo()
-        self.gui.algorithm_combo.currentTextChanged.disconnect()
-        self.tab3_load_parameter_table_1(self.gui.algorithm_combo.currentText())
-        self.gui.preview_button1.clicked.disconnect(self.tab3_confirm_parameter_before_filtering)
+        _safe_disconnect(self.gui.algorithm_combo.currentTextChanged)
+        _safe_disconnect(self.gui.preview_button1.clicked, self.tab3_confirm_parameter_before_filtering)
         # column 3
-        self.tab3_initialize_parameter_table_2()
-        self.gui.manual_adjustment_button.clicked.disconnect(self.tab3_ellipse_manual_adjustment)
-        self.gui.preview_button2.clicked.disconnect(self.tab3_confirm_parameter_for_filtering)
-        self.gui.batch_process_button.clicked.disconnect(self.tab3_ask_if_batch)
-        self.gui.finalise_analysis_button.clicked.disconnect(self.tab3_finalise_analysis)
+        _safe_disconnect(self.gui.manual_adjustment_button.clicked, self.tab3_ellipse_manual_adjustment)
+        _safe_disconnect(self.gui.preview_button2.clicked, self.tab3_confirm_parameter_for_filtering)
+        _safe_disconnect(self.gui.batch_process_button.clicked, self.tab3_ask_if_batch)
+        _safe_disconnect(self.gui.finalise_analysis_button.clicked, self.tab3_finalise_analysis)
 
         # results tab
-        self.gui.pdf_checkbox.stateChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.cdf_checkbox.stateChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.bins_spinbox.valueChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.min_x_axis_input.textChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.max_x_axis_input.textChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.legend_position_combobox.currentIndexChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.d32_checkbox.stateChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.dmean_checkbox.stateChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.dxy_checkbox.stateChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.dxy_x_input.textChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.dxy_y_input.textChanged.disconnect(self.results_tab_handler.generate_histogram)
-        self.gui.save_button.clicked.disconnect()
-        self.gui.export_images_button.clicked.disconnect()
-        self.gui.export_ml_button.clicked.disconnect()
+        _safe_disconnect(self.gui.histogram_by.currentIndexChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.pdf_checkbox.stateChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.cdf_checkbox.stateChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.bins_spinbox.valueChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.min_x_axis_input.textChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.max_x_axis_input.textChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(
+            self.gui.legend_position_combobox.currentIndexChanged, self.results_tab_handler.generate_histogram
+        )
+        _safe_disconnect(self.gui.d32_checkbox.stateChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.dmean_checkbox.stateChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.dxy_checkbox.stateChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.dxy_x_input.textChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.dxy_y_input.textChanged, self.results_tab_handler.generate_histogram)
+        _safe_disconnect(self.gui.save_button.clicked)
+        _safe_disconnect(self.gui.export_images_button.clicked)
+        _safe_disconnect(self.gui.export_ml_button.clicked)
 
-        self.image_processing_tab_handler.batch_processing_done.disconnect(self.start_generate_histogram)
+        _safe_disconnect(self.image_processing_tab_handler.batch_processing_done, self.start_generate_histogram)
 
     def disconnect_handlers_signals(self) -> None:
         """Disconnect signals between handlers to prevent further event handling.
@@ -2541,27 +2919,41 @@ class MainHandler:
         Removes signal-slot connections between handlers to prevent further event
         handling and interaction.
         """
-        self.image_processing_tab_handler.batch_processing_done.disconnect()
+        try:
+            self.image_processing_tab_handler.batch_processing_done.disconnect()
+        except (RuntimeError, TypeError):
+            pass
 
     def clear_all_gui_contents(self) -> None:
         """Clear all contents from the GUI components.
 
         Clears all contents from all GUI components to reset the application state.
         """
+        self.gui.folder_path_edit.clear()
         self.gui.image_list.clear()
+        self.gui.image_preview.clear()
 
+        self.gui.pixel_img_name.setText("Select Pixel Calibration Image")
         self.gui.pixel_img_preview.clear()
+        self.gui.bg_corr_image_name.setText("No background image selected")
         self.gui.bg_corr_image_preview.clear()
         self.gui.manual_px_mm_input.clear()
 
         self.gui.sample_image_preview.clear()
+        self.gui.sample_image_info_label.setText("No image selected")
         self.gui.label_before_filtering.axes.clear()
         self.gui.label_before_filtering.draw()
         self.gui.processed_image_preview.axes.clear()
         self.gui.processed_image_preview.draw()
+        self.gui.param_sandbox1.setRowCount(0)
+        self.gui.param_sandbox2.setRowCount(0)
 
+        self.gui.descriptive_size_label.setText("")
         self.gui.histogram_canvas.axes.clear()
         self.gui.histogram_canvas.draw()
+        self.image_processing_tab_handler.current_index = 0
+        if hasattr(self.gui, "tabs") and hasattr(self.gui, "folder_tab"):
+            self.gui.tabs.setCurrentIndex(self.gui.tabs.indexOf(self.gui.folder_tab))
 
     def restart(self) -> None:
         """Restart the application.
@@ -2773,6 +3165,7 @@ class MainHandler:
         results tab handler and triggers histogram generation to visualize
         the distribution of bubble sizes and other properties.
         """
+        self.image_processing_model.refresh_ellipses_properties()
         self.results_tab_handler.load_ellipse_properties(
             properties=self.image_processing_model.ellipses_properties,
             algorithm=self.image_processing_model.algorithm,

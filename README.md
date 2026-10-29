@@ -18,6 +18,7 @@ This project is significantly improved based on the first version of [Bubble Ana
   - **Iterative Watershed**: Advanced algorithm that iteratively applies thresholds to detect objects at different intensity levels.
   - **Peak-Based Watershed**: Feature-based segmentation using local maxima.
   - **BubMask (Deep Learning)**: Integrated Mask R-CNN model based on [BubMask (Kim & Park, 2021)](https://github.com/ywflow/BubMask) for superior accuracy in complex lighting or overlapping conditions.
+  - **YOLO Segmentation (optional)**: Any [Ultralytics](https://github.com/ultralytics/ultralytics) YOLO segmentation model (`.pt`). It needs `pip install ultralytics` (AGPL-3.0) and a weights file set in `weights_path`; the device can be CPU or GPU (CUDA).
 - **Interactive Ellipse Adjuster**: Manual adjustment interface for pixel-perfect refinement of detected bubbles.
 - **Measurement & Calibration**: Calculate sizes, shape distributions, and convert pixel measurements to real-world units (mm) using reference images.
 - **Streamlined Workflow**: Linear processing workflow (Batch -> Finalise -> Export) with no mid-process interruptions.
@@ -76,7 +77,17 @@ Once your batch analysis is finalised, navigate to the **Results** tab to extrac
 
 1. **Save Results (Excel + Graph)**: Creates an Excel file containing all bubble metrics (major/minor axis, equivalent diameter, area, eccentricity) and a `.png` of the generated histogram.
 2. **Export Annotated Images**: Select a folder to dump all the visual previews (images overlaid with the detected ellipses) for inclusion in reports.
-3. **Export ML Training Data**: Select a root folder. The app will generate an `images/` directory containing exact copies of your raw images, and a `masks/` directory containing high-fidelity `.npy` numpy arrays representing the exact integer matrix of the instance segmentation masks. This format preserves manual edits perfectly for retraining segmentation models.
+3. **Export Dataset (choose format)**: Pick a format, then a root folder. Every format uses your manual edits, writes bubbles at the original image resolution (manual polygon when there is one, fitted ellipse otherwise), and copies the images next to the annotations. Images with no bubbles are skipped.
+
+   | Format | Output | Typical use |
+   | --- | --- | --- |
+   | YOLO segmentation | `images/`, `labels/*.txt` (`class x1 y1 x2 y2 ...`, normalised), `data.yaml` | Training Ultralytics `-seg` models |
+   | YOLO detection | `images/`, `labels/*.txt` (`class x_center y_center width height`, normalised), `data.yaml` | Training box detectors |
+   | COCO instance segmentation | `images/`, `annotations.json` (pixel polygons, boxes, areas) | Detectron2, MMDetection, pycocotools |
+   | Pascal VOC | `JPEGImages/`, `Annotations/*.xml`, `ImageSets/Main/trainval.txt` (boxes only) | Box-based VOC tooling |
+   | Masks (`.npy`) | `images/`, `masks/*_mask.npy` (integer label image at the processed resolution) | The export of earlier versions |
+
+   The YOLO `data.yaml` points `train` and `val` at the same folder: no train/validation split is made, so split the images before training.
 
 ## Dependencies
 
@@ -102,7 +113,8 @@ This project is licensed under the GNU General Public License v3.0 - see the [LI
 ## Authors
 
 - Dr Diego Mesa (Main Author) - Department of Earth Science and Engineering, Imperial College London, United Kingdom
-- Mr Yiyang Guan - Department of Earth Science and Engineering, Imperial College London, United Kingdom
+- Mr Yiyang Guan - Curtin University, Australia
+- Mr Bastian Valdivia-Muñoz - Universidad de Talca, Chile
 
 ### Past Collaborators
 
