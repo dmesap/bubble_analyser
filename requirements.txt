@@ -1,5 +1,5 @@
 absl-py==2.4.0 ; python_version >= "3.11" and python_version < "3.13"
-annotated-types==0.7.0 ; python_version >= "3.11" and python_version < "3.13"
+annotated-types==0.8.0 ; python_version >= "3.11" and python_version < "3.13"
 asttokens==3.0.1 ; python_version >= "3.11" and python_version < "3.13"
 astunparse==1.6.3 ; python_version >= "3.11" and python_version < "3.13"
 certifi==2026.5.20 ; python_version >= "3.11" and python_version < "3.13"
