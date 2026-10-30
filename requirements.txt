@@ -62,7 +62,7 @@ ptyprocess==0.7.0 ; python_version >= "3.11" and python_version < "3.13" and sys
 pure-eval==0.2.3 ; python_version >= "3.11" and python_version < "3.13"
 pydantic-core==2.46.4 ; python_version >= "3.11" and python_version < "3.13"
 pydantic==2.13.4 ; python_version >= "3.11" and python_version < "3.13"
-pygments==2.20.0 ; python_version >= "3.11" and python_version < "3.13"
+pygments==2.21.0 ; python_version >= "3.11" and python_version < "3.13"
 pymdown-extensions==10.21.3 ; python_version >= "3.11" and python_version < "3.13"
 pyparsing==3.3.2 ; python_version >= "3.11" and python_version < "3.13"
 pyside6-addons==6.11.1 ; python_version >= "3.11" and python_version < "3.13"
