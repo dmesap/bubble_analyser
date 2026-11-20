@@ -10,7 +10,7 @@ authors = [
 
 [tool.poetry.dependencies]
 python = ">=3.11, <3.13"
-opencv-python = "^4.10.0"
+opencv-python = ">=4.10,<6.0"
 matplotlib = "^3.10.7"
 toml = "^0.10.2"
 numpy = "2.4.6"
