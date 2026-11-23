@@ -42,7 +42,6 @@ import skimage.color
 import skimage.draw
 import skimage.io
 import tensorflow as tf
-from imgaug import augmenters as iaa
 from skimage import img_as_uint  # type: ignore
 from skimage.measure import label, regionprops
 
@@ -273,6 +272,11 @@ class BubbleDataset(utils.Dataset):
 
 def train(model: modellib.MaskRCNN) -> None:
     """Train the model."""
+    # imgaug is only needed for training augmentation, so it is imported here rather than
+    # at module level: imgaug 0.4.0 fails to import under NumPy 2 (np.sctypes was removed),
+    # which would otherwise break BubMask inference (bubmask_wrapper imports this module).
+    from imgaug import augmenters as iaa
+
     # Training dataset.
     dataset_train = BubbleDataset()
     dataset_train.load_bubble(args.dataset, "train")
