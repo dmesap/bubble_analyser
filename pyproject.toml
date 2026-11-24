@@ -39,6 +39,11 @@ name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 priority = "explicit"
 
+# YOLO Segmentation method (Ultralytics, AGPL-3.0). Kept in its own group so the package
+# itself does not depend on it: `poetry install` adds it, `poetry install --without yolo` skips it.
+[tool.poetry.group.yolo.dependencies]
+ultralytics = "^8.4"
+
 [tool.poetry.group.docs.dependencies]
 mkdocs = "^1.6.1"
 mkdocs-material = "^9.6.11"
