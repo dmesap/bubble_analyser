@@ -17,6 +17,28 @@ from numpy import typing as npt
 from bubble_analyser.processing.image_postprocess import overlay_labels_on_rgb
 
 
+def letterbox_content_window(mask_shape: tuple[int, int], image_shape: tuple[int, int]) -> tuple[int, int, int, int]:
+    """Locate the image inside a letterboxed YOLO mask.
+
+    Ultralytics returns masks at the network input size, which is the image scaled to fit and padded
+    (letterboxed). This mirrors ``ultralytics.utils.ops.letterbox_span`` so the padding can be cut off
+    before the mask is resized back to the image.
+
+    Args:
+        mask_shape: (height, width) of the mask returned by YOLO.
+        image_shape: (height, width) of the image that was segmented.
+
+    Returns:
+        (top, left, height, width) of the image content inside the mask.
+    """
+    gain = min(mask_shape[0] / image_shape[0], mask_shape[1] / image_shape[1])
+    height = min(max(round(image_shape[0] * gain), 1), mask_shape[0])
+    width = min(max(round(image_shape[1] * gain), 1), mask_shape[1])
+    top = max(round((mask_shape[0] - height) / 2 - 0.1), 0)
+    left = max(round((mask_shape[1] - width) / 2 - 0.1), 0)
+    return top, left, height, width
+
+
 def normalize_yolo_device(device: object) -> str:
     """Convert user-facing CPU/GPU labels to Ultralytics device values."""
     device_text = str(device).strip()
@@ -238,10 +260,16 @@ class YOLOSegmentation:
             return labels
         keep = keep[np.argsort(scores[keep])[::-1]][: self.max_bubbles]
 
+        # YOLO masks come at the letterboxed network input size: cut the padding off before
+        # resizing, otherwise the masks are squashed and shifted on non-square images.
+        mask_height, mask_width = masks.shape[1:3]
+        top, left, content_height, content_width = letterbox_content_window((mask_height, mask_width), (height, width))
+
         next_label = 2
         for index in keep:
             mask = masks[index]
             if mask.shape != (height, width):
+                mask = mask[top : top + content_height, left : left + content_width]
                 mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
             binary = mask > 0.5
             if not np.any(binary):
