@@ -1001,6 +1001,8 @@ class ImageProcessingTabHandler(QThread):
         logging.info(f"Current choosing algorithm: {self.current_algorithm}")
 
         self.gui.param_sandbox1.clear()
+        # clear() also removes the header labels, so put them back
+        self.gui.param_sandbox1.setHorizontalHeaderLabels(["Parameter", "Value"])
 
         # Retrieve descriptions dynamically from the algorithm instance
         instance = self.model.methods_handler.all_classes.get(self.current_algorithm)
