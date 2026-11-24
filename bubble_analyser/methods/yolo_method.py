@@ -14,7 +14,45 @@ import cv2
 import numpy as np
 from numpy import typing as npt
 
+from bubble_analyser.core.param_guide import MethodGuide, guide_tooltips
 from bubble_analyser.processing.image_postprocess import overlay_labels_on_rgb
+
+YOLO_GUIDE: MethodGuide = {
+    "summary": (
+        "Ultralytics YOLO segmentation model. Very fast, but it needs a model trained on bubbles; the standard "
+        "Ultralytics models find none."
+    ),
+    "params": {
+        "weights_path": {"what": "Your bubble-trained YOLO segmentation model (.pt)."},
+        "confidence_threshold": {
+            "what": "Minimum confidence per bubble.",
+            "higher": "Fewer false detections, but faint bubbles are missed.",
+            "lower": "Finds more bubbles, and more false ones.",
+        },
+        "iou_threshold": {
+            "what": "Overlap above which two detections count as one bubble.",
+            "higher": "Keeps more overlapping bubbles, but risks duplicates.",
+            "lower": "Removes more overlaps.",
+        },
+        "resample": {
+            "what": (
+                "YOLO resizes every image to its own input size anyway (usually 640 px on the long side), so "
+                "resample mainly changes the speed."
+            ),
+            "tip": "Very small bubbles can be lost at that size.",
+        },
+        "max_bubbles": {
+            "what": "Most bubbles kept per image, highest confidence first.",
+            "tip": "Values above 300 currently have no effect.",
+        },
+        "device": {
+            "what": (
+                "CPU always works. GPU is much faster; the app switches back to CPU with a message if no usable "
+                "GPU is found."
+            ),
+        },
+    },
+}
 
 
 def letterbox_content_window(mask_shape: tuple[int, int], image_shape: tuple[int, int]) -> tuple[int, int, int, int]:
@@ -142,16 +180,11 @@ class YOLOSegmentation:
 
     def get_param_descriptions(self) -> dict[str, str]:
         """Return GUI tooltip descriptions for YOLO parameters."""
-        return {
-            "weights_path": "Absolute path to a YOLO segmentation model (.pt).",
-            "confidence_threshold": "Minimum confidence required to accept a YOLO mask.",
-            "iou_threshold": "YOLO non-maximum suppression IoU threshold.",
-            "resample": "Display/processing scale for the image before segmentation.",
-            "max_bubbles": "Maximum number of YOLO masks to keep in one image.",
-            "device": (
-                "Compute device for YOLO inference. CPU is always compatible; GPU uses NVIDIA CUDA when available."
-            ),
-        }
+        return guide_tooltips(YOLO_GUIDE)
+
+    def get_param_guide(self) -> MethodGuide:
+        """Return the parameter guide shown in the GUI's parameter guide window."""
+        return YOLO_GUIDE
 
     def update_params(self, params: dict[str, object]) -> None:
         """Update method parameters from the GUI table."""

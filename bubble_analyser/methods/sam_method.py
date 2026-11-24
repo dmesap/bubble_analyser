@@ -19,7 +19,60 @@ import cv2
 import numpy as np
 from numpy import typing as npt
 
+from bubble_analyser.core.param_guide import MethodGuide, guide_tooltips
 from bubble_analyser.processing.image_postprocess import overlay_labels_on_rgb
+
+SAM_GUIDE: MethodGuide = {
+    "summary": (
+        "Meta's general-purpose segmentation model. Needs no bubble training; a GPU is recommended. "
+        "It spreads a grid of points over the image and keeps the masks it is confident about."
+    ),
+    "params": {
+        "weights_path": {
+            "what": (
+                "SAM 2.1 checkpoint. sam2.1_hiera_large.pt is the default and most accurate; the base_plus, small "
+                "and tiny checkpoints (e.g. sam2.1_hiera_small.pt) are faster and lighter but a bit less accurate."
+            ),
+        },
+        "points_per_side": {
+            "what": (
+                "The grid has points_per_side x points_per_side points; a bubble that no point lands on is missed. "
+                "Point spacing = image width / points_per_side (4096 / 32 = 128 px)."
+            ),
+            "higher": "48 or 64 finds smaller bubbles, but the time grows roughly with the square.",
+            "lower": "Faster, but small bubbles are missed.",
+        },
+        "pred_iou_thresh": {
+            "what": "SAM's own quality score for each mask.",
+            "higher": "Only crisp, confident masks.",
+            "lower": (
+                "0.7-0.8 keeps more masks, including faint or blurred bubbles, but also background patches and "
+                "half-bubbles."
+            ),
+        },
+        "stability_score_thresh": {
+            "what": "How stable a mask's outline is.",
+            "higher": "Only sharp-edged bubbles.",
+            "lower": "0.85-0.9 keeps bubbles with soft, out-of-focus edges, plus more junk.",
+        },
+        "min_mask_region_area": {
+            "what": (
+                "In px of the resampled image (0 = off). Fills holes, such as the bright highlight in a bubble's "
+                "centre, and removes specks smaller than this inside each mask, which helps ring-like masks pass "
+                "the solidity filter."
+            ),
+            "tip": "Slower, and it rarely changes the bubble count. Typical values are 50-300.",
+        },
+        "resample": {
+            "what": "SAM always looks at a 1024 x 1024 copy, so resample mainly sets how finely outlines are traced.",
+            "higher": (
+                "Sharper outlines, and it sometimes finds bubbles it missed (one test image: 3 masks at 0.4, all 5 "
+                "at 1.0), but it needs much more GPU memory and time."
+            ),
+            "lower": "Less GPU memory.",
+        },
+    },
+}
 
 # Mapping from SAM 2.1 checkpoint filename to the model config bundled with
 # the SAM-2 package. The checkpoint and the config must describe the same
@@ -128,14 +181,15 @@ class SamSegmentation:
         Returns:
             Dict[str, str]: Dictionary mapping parameter names to their descriptions.
         """
-        return {
-            "weights_path": "Absolute path to the SAM 2.1 checkpoint (.pt file, e.g. sam2.1_hiera_large.pt).",
-            "points_per_side": "Number of points per side of the sampling grid for automatic mask generation. Higher values detect more/small bubbles at extra compute cost.",  # noqa: E501
-            "pred_iou_thresh": "Filtering threshold (0.0 to 1.0) on the mask's predicted IoU quality score.",
-            "stability_score_thresh": "Filtering threshold (0.0 to 1.0) on the mask's stability under threshold perturbation.",  # noqa: E501
-            "min_mask_region_area": "Minimum mask area in pixels; smaller masks are removed (0 keeps all).",
-            "resample": "Resampling factor to scale the image before processing. Lower values increase speed but reduce detail.",  # noqa: E501
-        }
+        return guide_tooltips(SAM_GUIDE)
+
+    def get_param_guide(self) -> MethodGuide:
+        """Get the parameter guide shown in the GUI's parameter guide window.
+
+        Returns:
+            MethodGuide: What the method does and what each parameter changes.
+        """
+        return SAM_GUIDE
 
     def update_params(self, params: dict[str, object]) -> None:
         """Update the parameters for this segmentation method.

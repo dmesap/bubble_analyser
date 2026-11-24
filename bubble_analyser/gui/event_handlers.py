@@ -55,6 +55,7 @@ from PySide6.QtWidgets import (
 )
 
 from bubble_analyser.core.models import CalibrationModel, InputFilesModel
+from bubble_analyser.core.param_guide import build_guide_html
 from bubble_analyser.gui import (
     ImageProcessingModel,
     Step1Worker,
@@ -63,6 +64,7 @@ from bubble_analyser.gui import (
 )
 from bubble_analyser.gui.export_dialog import ExportFormatDialog
 from bubble_analyser.gui.gui import MainWindow, ProcessingDialog
+from bubble_analyser.gui.param_guide_dialog import ParameterGuideDialog
 from bubble_analyser.processing import Config, cv2_to_qpixmap
 from bubble_analyser.processing.dataset_export import FrameAnnotation, export_dataset
 
@@ -700,6 +702,7 @@ class ImageProcessingTabHandler(QThread):
         self.algorithm_list: list[str] = []
         self.export_handler: ExportSettingsHandler
         self.if_save_processed_images = False
+        self._parameter_guide_dialog: ParameterGuideDialog | None = None
 
         self.save_path: Path = cast(Path, None)
 
@@ -1349,8 +1352,45 @@ class ImageProcessingTabHandler(QThread):
             logging.error(f"Error updating description: {e}")
             self.gui.algorithm_description_label.setText("No description available.")
 
+        # Keep an open parameter guide in step with the selected method
+        self.refresh_parameter_guide()
+
         if auto_run_after:
             self.confirm_parameter_before_filtering()
+
+    def show_parameter_guide(self) -> None:
+        """Open the parameter guide window for the selected method, or bring it to the front."""
+        if self._parameter_guide_dialog is None:
+            self._parameter_guide_dialog = ParameterGuideDialog(self.gui)
+        self._update_parameter_guide(self._parameter_guide_dialog)
+        self._parameter_guide_dialog.show()
+        self._parameter_guide_dialog.raise_()
+        self._parameter_guide_dialog.activateWindow()
+
+    def refresh_parameter_guide(self) -> None:
+        """Update the parameter guide window, if it is open, after the selected method changes."""
+        dialog = self._parameter_guide_dialog
+        if dialog is not None and dialog.isVisible():
+            self._update_parameter_guide(dialog)
+
+    def close_parameter_guide(self) -> None:
+        """Close the parameter guide window if it was opened."""
+        if self._parameter_guide_dialog is not None:
+            self._parameter_guide_dialog.close()
+
+    def _update_parameter_guide(self, dialog: ParameterGuideDialog) -> None:
+        """Fill the parameter guide window with the guide of the selected method.
+
+        Args:
+            dialog: The parameter guide window.
+        """
+        algorithm = self.gui.algorithm_combo.currentText()
+        instance = self.model.methods_handler.all_classes.get(algorithm)
+        guide = instance.get_param_guide() if hasattr(instance, "get_param_guide") else None
+        descriptions = instance.get_param_descriptions() if hasattr(instance, "get_param_descriptions") else {}
+        description = str(getattr(instance, "description", ""))
+        param_names = list(self.model.all_methods_n_params.get(algorithm, {}).keys())
+        dialog.show_guide(algorithm, build_guide_html(algorithm, description, guide, param_names, descriptions))
 
     def update_model_algorithm(self, algorithm: str) -> None:
         """Update the algorithm in the processing model.
@@ -2844,6 +2884,7 @@ class MainHandler:
             lambda: self.tab3_handle_algorithm_change(self.gui.algorithm_combo.currentText())
         )
         self.tab3_load_parameter_table_1(self.gui.algorithm_combo.currentText())
+        self.gui.algorithm_info_button.clicked.connect(self.tab3_show_parameter_guide)
         self.gui.preview_button1.clicked.connect(self.tab3_confirm_parameter_before_filtering)
         # column 3
         self.tab3_initialize_parameter_table_2()
@@ -2892,6 +2933,7 @@ class MainHandler:
         _safe_disconnect(self.gui.preview_processed_images_button.clicked, self.tab3_preview_processed_images)
         # column 2
         _safe_disconnect(self.gui.algorithm_combo.currentTextChanged)
+        _safe_disconnect(self.gui.algorithm_info_button.clicked, self.tab3_show_parameter_guide)
         _safe_disconnect(self.gui.preview_button1.clicked, self.tab3_confirm_parameter_before_filtering)
         # column 3
         _safe_disconnect(self.gui.manual_adjustment_button.clicked, self.tab3_ellipse_manual_adjustment)
@@ -2948,6 +2990,7 @@ class MainHandler:
 
         self.gui.sample_image_preview.clear()
         self.gui.sample_image_info_label.setText("No image selected")
+        self.image_processing_tab_handler.close_parameter_guide()
         self.gui.label_before_filtering.axes.clear()
         self.gui.label_before_filtering.draw()
         self.gui.processed_image_preview.axes.clear()
@@ -3111,6 +3154,10 @@ class MainHandler:
         Delegates the image preview functionality to the image processing tab handler.
         """
         self.image_processing_tab_handler.preview_processed_images()
+
+    def tab3_show_parameter_guide(self) -> None:
+        """Show the parameter guide of the selected method (information button next to the drop-down)."""
+        self.image_processing_tab_handler.show_parameter_guide()
 
     def tab3_handle_algorithm_change(self, algorithm: str) -> None:
         """Handle a change in the selected algorithm in the image processing tab.

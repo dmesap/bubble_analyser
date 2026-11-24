@@ -37,3 +37,16 @@ class <method_name>():
     def get_results_img(self):
         ......
         return self.labels_on_img, self.labels (labels_on_img is the overlayed image with the masks of the bubbles, labels_watershed is just the masks of the bubbles)
+
+Optional, for the GUI help:
+
+    def get_param_descriptions(self):
+        # short text per parameter, shown as a tooltip in the parameter table
+        return {"param1": "what param1 does", ......}
+
+    def get_param_guide(self):
+        # shown by the information button next to the method drop-down (see
+        # bubble_analyser/core/param_guide.py for the format); guide_tooltips(guide)
+        # turns it into the get_param_descriptions() text
+        return {"summary": "what the method does",
+                "params": {"param1": {"what": "...", "higher": "...", "lower": "...", "tip": "..."}}}

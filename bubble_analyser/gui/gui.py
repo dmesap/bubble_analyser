@@ -27,7 +27,7 @@ from typing import cast
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -44,8 +44,10 @@ from PySide6.QtWidgets import (
     QMenuBar,
     QPushButton,
     QSpinBox,
+    QStyle,
     QTableWidget,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -486,11 +488,22 @@ class MainWindow(QMainWindow):
         algorithm_label = QLabel("Select Algorithm:")
         self.algorithm_combo = QComboBox()
 
+        # Information button: opens the parameter guide of the selected method
+        self.algorithm_info_button = QToolButton()
+        self.algorithm_info_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation))
+        self.algorithm_info_button.setIconSize(QSize(20, 20))
+        self.algorithm_info_button.setAutoRaise(True)
+        self.algorithm_info_button.setToolTip("Parameter guide: what each parameter of this method does")
+        self.algorithm_info_button.setAccessibleName("Parameter guide")
+        algorithm_row = QHBoxLayout()
+        algorithm_row.addWidget(self.algorithm_combo, 1)
+        algorithm_row.addWidget(self.algorithm_info_button)
+
         # Parameter sandbox for img_resample_factor, threshold_value, element_size
         sandbox1_label = QLabel("Adjust parameters before filtering")
 
         second_column_layout.addWidget(algorithm_label)
-        second_column_layout.addWidget(self.algorithm_combo)
+        second_column_layout.addLayout(algorithm_row)
         second_column_layout.addWidget(sandbox1_label)
 
         self.param_sandbox1 = QTableWidget(0, 2)

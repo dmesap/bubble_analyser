@@ -22,7 +22,59 @@ if TYPE_CHECKING:
     from bubble_analyser.cnn_methods.bubmask_wrapper import BubMaskDetector
 
 # from bubble_analyser.cnn_methods.bubmask_wrapper import BubMaskConfig, BubMaskDetector
+from bubble_analyser.core.param_guide import MethodGuide, guide_tooltips
 from bubble_analyser.processing.image_postprocess import overlay_labels_on_rgb
+
+RELOAD_NOTE = "Changing it reloads the model, so the next run is slow."
+
+BUBMASK_GUIDE: MethodGuide = {
+    "summary": (
+        "Mask R-CNN model trained on bubbles (Kim & Park, 2021). Handles overlapping bubbles and difficult "
+        "lighting. Slow on Windows, where it runs on the CPU only (about 1 minute per large image)."
+    ),
+    "params": {
+        "weights_path": {
+            "what": "The .h5 model file. The app offers to download it the first time you select BubMask.",
+        },
+        "confidence_threshold": {
+            "what": "Minimum score for a detection to count as a bubble.",
+            "higher": "Fewer false detections, but more missed bubbles.",
+            "lower": (
+                "Finds more bubbles (faint, blurred or partly hidden), plus more false ones. "
+                "Values below 0.6 behave like 0.6."
+            ),
+        },
+        "resample": {
+            "what": "Shrinks the image before BubMask's own resizing (see image_max_dim).",
+            "tip": (
+                "Keep resample x image width >= image_max_dim (for example 0.4 x 4096 = 1638 >= 1024), "
+                "otherwise detail is lost before the model sees it."
+            ),
+        },
+        "image_min_dim": {
+            "what": "Small images are enlarged until their short side is at least this. Only matters for small images.",
+            "tip": RELOAD_NOTE,
+        },
+        "image_max_dim": {
+            "what": "BubMask shrinks each image so its long side is at most this.",
+            "higher": (
+                "Small bubbles look bigger to the model, so detection is better and outlines finer, "
+                "but it is slower and uses more memory."
+            ),
+            "lower": "Faster, but small bubbles are missed.",
+            "tip": "Must be a multiple of 64 (768, 1024, 1536...). " + RELOAD_NOTE,
+        },
+        "max_bubbles": {
+            "what": "Maximum number of detections kept per image.",
+            "tip": "Raise it if an image has more bubbles than this.",
+        },
+        "nms_threshold": {
+            "what": "How much two detections may overlap before the weaker one is thrown away as a duplicate.",
+            "higher": "Keeps more overlapping bubbles in dense clusters, but risks duplicates.",
+            "lower": "Cleaner, but overlapping bubbles can be lost.",
+        },
+    },
+}
 
 
 class BubMaskWatershed:
@@ -83,15 +135,15 @@ class BubMaskWatershed:
         Returns:
             Dict[str, str]: Dictionary mapping parameter names to their descriptions.
         """
-        return {
-            "weights_path": "Absolute path to the trained Mask R-CNN model weights (.h5 file).",
-            "confidence_threshold": "Minimum probability (0.0 to 1.0) required for a detection to be accepted as a bubble.",  # noqa: E501
-            "resample": "Resampling factor to scale the image before processing. Lower values increase speed but reduce detail.",  # noqa: E501
-            "image_min_dim": "Minimum internal image dimension used by Mask R-CNN. Higher values improve small-bubble detection but increase runtime and memory use.",  # noqa: E501
-            "image_max_dim": "Maximum internal image dimension used by Mask R-CNN. Higher values improve small-bubble detection but increase runtime and memory use.",  # noqa: E501
-            "max_bubbles": "Maximum number of bubbles the model is allowed to detect in a single image.",
-            "nms_threshold": "Non-Maximum Suppression threshold. Lower values allow less overlap between detected bubbles.",  # noqa: E501
-        }
+        return guide_tooltips(BUBMASK_GUIDE)
+
+    def get_param_guide(self) -> MethodGuide:
+        """Get the parameter guide shown in the GUI's parameter guide window.
+
+        Returns:
+            MethodGuide: What the method does and what each parameter changes.
+        """
+        return BUBMASK_GUIDE
 
     def update_params(self, params: dict[str, object]) -> None:
         """Update the parameters for this watershed method.

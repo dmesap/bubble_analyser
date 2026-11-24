@@ -20,8 +20,80 @@ import numpy as np
 from cv2.typing import MatLike
 from numpy import typing as npt
 
+from bubble_analyser.core.param_guide import (
+    CONNECTIVITY_HELP,
+    ELEMENT_SIZE_HELP,
+    RESAMPLE_HELP,
+    MethodGuide,
+    guide_tooltips,
+)
 from bubble_analyser.processing.threshold_methods import ThresholdMethods
 from bubble_analyser.processing.watershed_parent_class import WatershedSegmentation
+
+EDGE_NOTE = "Bubbles touching the image edge are ignored."
+
+DEFAULT_GUIDE: MethodGuide = {
+    "summary": (
+        "Classic watershed with three rounds of seeds (Mesa et al., 2022). Fast and runs on the CPU. "
+        "Best for separate, high-contrast bubbles on a plain background. " + EDGE_NOTE
+    ),
+    "how_it_works": (
+        "The image is split into bubbles and background automatically (or against the background image set in "
+        "calibration), cleaned up, and turned into a distance map that peaks at each bubble's centre, higher for "
+        "bigger bubbles. Seeds are taken in three rounds at high, mid and low fractions of the tallest peak; each "
+        "seed becomes one bubble."
+    ),
+    "params": {
+        "resample": RESAMPLE_HELP,
+        "high_thresh": {
+            "what": "First round of seeds: only the centres of the largest bubbles.",
+            "higher": "Fewer bubbles get a seed in the first round; they are picked up in the later rounds.",
+            "lower": "Two touching large bubbles can share one seed and merge.",
+            "tip": "Usually has little effect. The app requires high_thresh > mid_thresh > low_thresh.",
+        },
+        "mid_thresh": {
+            "what": "Second round of seeds, for medium bubbles.",
+            "higher": "Fewer seeds and more merged bubbles.",
+            "lower": (
+                "More bubbles get their own seed, so touching bubbles are separated better. Too low and elongated "
+                "bubbles get split in two."
+            ),
+        },
+        "low_thresh": {
+            "what": "Last round of seeds, which catches small bubbles.",
+            "higher": "Less merging, but small or faint bubbles may be missed.",
+            "lower": "Even tiny blobs get seeds, but large leftover seeds can join touching bubbles.",
+        },
+        "element_size": ELEMENT_SIZE_HELP,
+        "connectivity": CONNECTIVITY_HELP,
+    },
+}
+
+ITERATIVE_GUIDE: MethodGuide = {
+    "summary": (
+        "Like Default, but the seed level is lowered step by step from max_thresh to min_thresh instead of in "
+        "three rounds. Better for mixed bubble sizes and clusters, but slower. " + EDGE_NOTE
+    ),
+    "params": {
+        "resample": RESAMPLE_HELP,
+        "element_size": ELEMENT_SIZE_HELP,
+        "connectivity": CONNECTIVITY_HELP,
+        "max_thresh": {
+            "what": "Highest seed level, like high_thresh in Default.",
+            "tip": "Usually has little effect. Must be greater than min_thresh.",
+        },
+        "min_thresh": {
+            "what": "Lowest seed level: a bubble only gets a seed if its peak reaches it.",
+            "higher": "Fewer fragments and faster, but small bubbles are missed.",
+            "lower": "Smaller bubbles are found, but you get more small fragments.",
+        },
+        "step_size": {
+            "what": "Gap between seed levels.",
+            "higher": "Faster with fewer fragments, closer to how Default behaves.",
+            "lower": "Finer separation, but many more fragments and much slower.",
+        },
+    },
+}
 
 
 class TestWatershed(WatershedSegmentation):
@@ -93,7 +165,7 @@ class TestWatershed(WatershedSegmentation):
             "resample": "Resampling factor to scale the image before processing. Lower values increase speed but reduce detail.",  # noqa: E501  # noqa: E501
             "threshold_value": "Static threshold value used to binarize the image (0.0 to 1.0).",
             "if_gaussianblur": "Whether to apply a Gaussian blur to the image to reduce high-frequency noise before segmentation.",  # noqa: E501
-            "ksize": "Kernel size for Gaussian blur. Larger values produce a smoother, blurrier image.",
+            "ksize": "Size of the Sobel edge filter (1, 3, 5 or 7). Larger values give smoother, thicker edges and less noise.",  # noqa: E501
             "max_thresh": "Upper limit for iterative thresholding.",
             "min_thresh": "Lower limit for iterative thresholding.",
             "step_size": "Increment size for the iterative thresholding process.",
@@ -327,14 +399,15 @@ class IterativeWatershed(WatershedSegmentation):
         Returns:
             dict[str, str]: Dictionary mapping parameter names to their descriptions.
         """
-        return {
-            "resample": "Resampling factor to scale the image before processing. Lower values increase speed but reduce detail.",  # noqa: E501
-            "element_size": "Size of the structuring element for morphological operations.",
-            "connectivity": "Pixel neighborhood for region growing (4 or 8).",
-            "max_thresh": "Upper limit for iterative thresholding.",
-            "min_thresh": "Lower limit for iterative thresholding.",
-            "step_size": "Increment size for the iterative thresholding process.",
-        }
+        return guide_tooltips(ITERATIVE_GUIDE)
+
+    def get_param_guide(self) -> MethodGuide:
+        """Get the parameter guide shown in the GUI's parameter guide window.
+
+        Returns:
+            MethodGuide: What the method does and what each parameter changes.
+        """
+        return ITERATIVE_GUIDE
 
     def initialize_processing(
         self,
@@ -448,14 +521,15 @@ class NormalWatershed(WatershedSegmentation):
         Returns:
             dict[str, str]: Dictionary mapping parameter names to their descriptions.
         """
-        return {
-            "resample": "Resampling factor to scale the image before processing. Lower values increase speed but reduce detail.",  # noqa: E501
-            "high_thresh": "Threshold for the 'High' intensity population in multi-level segmentation.",
-            "mid_thresh": "Threshold for the 'Medium' intensity population.",
-            "low_thresh": "Threshold for the 'Low' intensity population.",
-            "element_size": "Size of the structuring element for morphological operations.",
-            "connectivity": "Pixel neighborhood for region growing (4 or 8).",
-        }
+        return guide_tooltips(DEFAULT_GUIDE)
+
+    def get_param_guide(self) -> MethodGuide:
+        """Get the parameter guide shown in the GUI's parameter guide window.
+
+        Returns:
+            MethodGuide: What the method does and what each parameter changes.
+        """
+        return DEFAULT_GUIDE
 
     def initialize_processing(
         self,

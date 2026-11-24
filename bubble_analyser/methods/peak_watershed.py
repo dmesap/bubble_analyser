@@ -7,7 +7,39 @@ import numpy as np
 from numpy import typing as npt
 from skimage.feature import peak_local_max
 
+from bubble_analyser.core.param_guide import RESAMPLE_HELP, MethodGuide, guide_tooltips
 from bubble_analyser.processing.watershed_parent_class import WatershedSegmentation
+
+PEAK_GUIDE: MethodGuide = {
+    "summary": (
+        "Seeds are local peaks of a smoothed distance map, kept a minimum distance apart. Good for varying sizes "
+        "and touching bubbles. Runs on the CPU; the clean-up brush is fixed at 3 px and connectivity at 8. "
+        "Bubbles touching the image edge are ignored."
+    ),
+    "params": {
+        "resample": RESAMPLE_HELP,
+        "min_distance_mm": {
+            "what": (
+                "Smallest allowed distance between two bubble centres, in mm. It needs a correct px/mm calibration."
+            ),
+            "higher": "Touching bubbles closer than this merge into one.",
+            "lower": "Large or elongated bubbles may split in two.",
+            "tip": "Start at about half the diameter of the smallest bubbles you need to separate.",
+        },
+        "sensitivity": {
+            "what": "A centre counts only if its peak is at least (1 - sensitivity) x the tallest peak.",
+            "higher": "Towards 1: smaller bubbles are accepted, along with more noise.",
+            "lower": "Only bubbles close in size to the biggest one are found.",
+        },
+        "smoothing_sigma": {
+            "what": "Blurs the distance map (in px) before peaks are found.",
+            "higher": (
+                "Removes double peaks inside one bubble, so less splitting, but can merge small touching bubbles."
+            ),
+            "lower": "Many more peaks, so bubbles get split. 0 turns smoothing off.",
+        },
+    },
+}
 
 
 class PeakWatershed(WatershedSegmentation):
@@ -48,12 +80,15 @@ class PeakWatershed(WatershedSegmentation):
         Returns:
             dict[str, str]: Dictionary mapping parameter names to their descriptions.
         """
-        return {
-            "resample": "Resampling factor to scale the image before processing. Lower values increase speed but reduce detail.",  # noqa: E501
-            "min_distance_mm": "Minimum distance allowed between two separate bubble peaks.",
-            "sensitivity": "Threshold sensitivity for identifying intensity peaks as potential bubbles.",
-            "smoothing_sigma": "Standard deviation for Gaussian kernel used to smooth the distance transform map.",
-        }
+        return guide_tooltips(PEAK_GUIDE)
+
+    def get_param_guide(self) -> MethodGuide:
+        """Get the parameter guide shown in the GUI's parameter guide window.
+
+        Returns:
+            MethodGuide: What the method does and what each parameter changes.
+        """
+        return PEAK_GUIDE
 
     def update_params(self, params: dict[str, Any]) -> None:
         """Update internal parameters from a dictionary."""
