@@ -74,6 +74,13 @@ class WeightsDownloadThread(QThread):
     finished_download = Signal(bool, str)
 
     def __init__(self, filename: str = "mask_rcnn_bubble.h5", url: str | None = None) -> None:
+        """Store which weights file to download and from where.
+
+        Args:
+            filename (str): Filename to save the weights under (in the weights dir).
+            url (str | None): Direct download URL of the weights file. Defaults to the
+                known URL for the filename (see bubble_analyser.weights.loader.WEIGHTS_URLS).
+        """
         super().__init__()
         self.filename = filename
         self.url = url
@@ -85,10 +92,9 @@ class WeightsDownloadThread(QThread):
 
             url = self.url
             if not url:
-                if self.filename == "mask_rcnn_bubble.h5":
-                    url = "https://github.com/ImperialCollegeLondon/bubble_analyser/releases/download/v0.3.0/mask_rcnn_bubble.h5"
-                else:
-                    url = f"https://github.com/ImperialCollegeLondon/bubble_analyser/releases/download/v2.0.0/{self.filename}"
+                from bubble_analyser.weights.loader import get_weights_url
+
+                url = get_weights_url(self.filename)
 
             if getattr(sys, "frozen", False):
                 base_dir = getattr(sys, "_MEIPASS", "")
@@ -1237,16 +1243,17 @@ class ImageProcessingTabHandler(QThread):
             new_algorithm (str): The name of the newly selected algorithm.
         """
         algo_name = new_algorithm.lower()
-        is_ml_method = (
-            "cnn" in algo_name or "rcnn" in algo_name or "bubmask" in algo_name or "deep learning" in algo_name
-        )
+        ml_keywords = ("cnn", "rcnn", "bubmask", "deep learning", "sam")
+        is_ml_method = any(keyword in algo_name for keyword in ml_keywords)
 
         auto_run_after = False
 
         if is_ml_method:
             from bubble_analyser.weights.loader import get_weights_path
 
-            weights_path, download_url = get_weights_path("mask_rcnn_bubble.h5", download_if_missing=False)
+            # Each ML method ships its own weights file.
+            weights_filename = "sam2.1_hiera_large.pt" if "sam" in algo_name else "mask_rcnn_bubble.h5"
+            weights_path, download_url = get_weights_path(weights_filename, download_if_missing=False)
 
             if weights_path is None:
                 reply = QMessageBox.question(
@@ -1254,7 +1261,7 @@ class ImageProcessingTabHandler(QThread):
                     "Download Required",
                     (
                         f"The '{new_algorithm}' method requires a deep learning weights "
-                        f"file (mask_rcnn_bubble.h5) which was not found locally.\n\n"
+                        f"file ({weights_filename}) which was not found locally.\n\n"
                         f"Do you want to download it now? (This may take a few minutes)."
                     ),
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -1262,7 +1269,7 @@ class ImageProcessingTabHandler(QThread):
                 )
 
                 if reply == QMessageBox.StandardButton.Yes:
-                    if not self.download_weights_dialog("mask_rcnn_bubble.h5", download_url):
+                    if not self.download_weights_dialog(weights_filename, download_url):
                         self._revert_algorithm_selection()
                         return
                     auto_run_after = True

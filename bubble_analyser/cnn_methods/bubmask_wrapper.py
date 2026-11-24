@@ -544,7 +544,8 @@ class BubMaskDetector:
                     mask = (masks[:, :, i] * 255).astype(np.uint8)
                     skimage.io.imsave(str(mask_path), mask)
 
-    def get_bubble_properties(self, masks: npt.NDArray[np.bool_], pixel_to_mm: float = 1.0) -> list[dict[str, object]]:
+    @staticmethod
+    def get_bubble_properties(masks: npt.NDArray[np.bool_], pixel_to_mm: float = 1.0) -> list[dict[str, object]]:
         """Calculate properties of detected bubbles.
 
         Args:

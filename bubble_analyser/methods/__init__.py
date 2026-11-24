@@ -2,6 +2,7 @@
 
 from bubble_analyser.methods.bubmask_method import BubMaskWatershed
 from bubble_analyser.methods.peak_watershed import PeakWatershed
+from bubble_analyser.methods.sam_method import SamSegmentation
 from bubble_analyser.methods.watershed_methods import IterativeWatershed, NormalWatershed
 from bubble_analyser.methods.yolo_method import YOLOSegmentation
 
@@ -10,5 +11,6 @@ __all__ = [
     "IterativeWatershed",
     "NormalWatershed",
     "PeakWatershed",
+    "SamSegmentation",
     "YOLOSegmentation",
 ]

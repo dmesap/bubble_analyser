@@ -17,6 +17,7 @@ This project is significantly improved based on the first version of [Bubble Ana
   - **Normal Watershed**: Standard watershed algorithm with triple threshold.
   - **Iterative Watershed**: Advanced algorithm that iteratively applies thresholds to detect objects at different intensity levels.
   - **Peak-Based Watershed**: Feature-based segmentation using local maxima.
+  - **SAM 2.1 (Zero-shot Deep Learning)**: Meta's [Segment Anything Model 2.1](https://github.com/facebookresearch/sam2) with automatic mask generation — detects bubbles without any bubble-specific training (Apache 2.0). Runs on GPU when available.
   - **BubMask (Deep Learning)**: Integrated Mask R-CNN model based on [BubMask (Kim & Park, 2021)](https://github.com/ywflow/BubMask) for superior accuracy in complex lighting or overlapping conditions.
   - **YOLO Segmentation (optional)**: Any [Ultralytics](https://github.com/ultralytics/ultralytics) YOLO segmentation model (`.pt`). It needs `pip install ultralytics` (AGPL-3.0) and a weights file set in `weights_path`; the device can be CPU or GPU (CUDA).
 - **Interactive Ellipse Adjuster**: Manual adjustment interface for pixel-perfect refinement of detected bubbles.
@@ -94,6 +95,7 @@ Once your batch analysis is finalised, navigate to the **Results** tab to extrac
 - Python 3.12
 - PySide6 (Qt for Python)
 - TensorFlow & Keras
+- PyTorch & SAM 2.1 (zero-shot segmentation)
 - NumPy, SciPy, Pandas
 - scikit-image, OpenCV
 - Matplotlib
