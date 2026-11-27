@@ -3757,18 +3757,20 @@ files = [
 
 [[package]]
 name = "types-tqdm"
-version = "4.68.0.20260608"
+version = "4.70.0.20261122"
 description = "Typing stubs for tqdm"
 optional = false
 python-versions = ">=3.10"
 groups = ["dev"]
 files = [
-    {file = "types_tqdm-4.68.0.20260608-py3-none-any.whl", hash = "sha256:450a6e7e9e9b604928968927c414b32970e40091213c4180e1ed470905b13eff"},
-    {file = "types_tqdm-4.68.0.20260608.tar.gz", hash = "sha256:e1dfddf8770fbc30ecaf95ae57c286397831235064308f7dfc2b1d6684a76107"},
+    {file = "types_tqdm-4.70.0.20261122-py3-none-any.whl", hash = "sha256:a8e81a67368e5c03eb5e20dfbdd27162cfc0fcfbb0951a8a05357a895deeba74"},
+    {file = "types_tqdm-4.70.0.20261122.tar.gz", hash = "sha256:f2c4ac5e043ee54d73cd1abc3f111dc7a2ab9ee717eb593b8e7330c326c3e61a"},
 ]
 
-[package.dependencies]
-types-requests = "*"
+[package.extras]
+all = ["requests (>=2.34.0)", "types-tensorflow"]
+requests = ["requests (>=2.34.0)"]
+tensorflow = ["types-tensorflow"]
 
 [[package]]
 name = "typing-extensions"
